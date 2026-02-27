@@ -9,8 +9,8 @@ from datetime import datetime
 # SETTINGS - CHANGE THESE
 # ─────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_ROLE_NAME = "Admin"          # Name of your admin role in Discord
-ANNOUNCEMENT_CHANNEL_ID = 0        # Channel ID for promo/demo announcements (0 = disabled)
+ADMIN_ROLE_NAME = "Admin"
+ANNOUNCEMENT_CHANNEL_ID = 0
 # ─────────────────────────────────────────
 
 TIERS = [
@@ -28,7 +28,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
 # ─────────────────────────────────────────
-# DATABASE SETUP
+# DATABASE
 # ─────────────────────────────────────────
 def get_db():
     conn = sqlite3.connect("inazuma.db")
@@ -48,7 +48,8 @@ def setup_db():
             goals_against INTEGER DEFAULT 0,
             rank_in_tier INTEGER DEFAULT 0,
             round_wins INTEGER DEFAULT 0,
-            round_losses INTEGER DEFAULT 0
+            round_losses INTEGER DEFAULT 0,
+            round_done INTEGER DEFAULT 0
         )
     """)
     c.execute("""
@@ -65,7 +66,7 @@ def setup_db():
     conn.close()
 
 # ─────────────────────────────────────────
-# HELPER FUNCTIONS
+# HELPERS
 # ─────────────────────────────────────────
 def is_admin():
     async def predicate(interaction: discord.Interaction):
@@ -78,9 +79,9 @@ def is_admin():
 
 def get_player(name: str):
     conn = get_db()
-    player = conn.execute("SELECT * FROM players WHERE name = ?", (name,)).fetchone()
+    p = conn.execute("SELECT * FROM players WHERE name = ?", (name,)).fetchone()
     conn.close()
-    return player
+    return p
 
 def tier_index(tier: str):
     try:
@@ -91,29 +92,52 @@ def tier_index(tier: str):
 def get_tier_players(tier: str):
     conn = get_db()
     players = conn.execute(
-        "SELECT * FROM players WHERE tier = ? ORDER BY rank_in_tier ASC",
-        (tier,)
+        "SELECT * FROM players WHERE tier = ? ORDER BY rank_in_tier ASC", (tier,)
     ).fetchall()
     conn.close()
     return players
 
 def update_ranks_in_tier(tier: str):
     conn = get_db()
-    players = conn.execute(
-        "SELECT name, wins, losses FROM players WHERE tier = ?", (tier,)
-    ).fetchall()
+    players = conn.execute("SELECT name, wins, losses FROM players WHERE tier = ?", (tier,)).fetchall()
 
     def score(p):
         total = p["wins"] + p["losses"]
-        if total == 0:
-            return 0
-        return p["wins"] / total
+        return p["wins"] / total if total > 0 else 0
 
     sorted_players = sorted(players, key=score, reverse=True)
     for i, p in enumerate(sorted_players):
         conn.execute("UPDATE players SET rank_in_tier = ? WHERE name = ?", (i + 1, p["name"]))
     conn.commit()
     conn.close()
+
+def get_valid_matchups(tier: str):
+    """
+    Returns list of valid matchups based on round_wins and round_losses.
+    Players can only face someone with the same W/L record.
+    Players with 2W or 2L are done for the round.
+    """
+    conn = get_db()
+    players = conn.execute(
+        "SELECT * FROM players WHERE tier = ? AND round_done = 0", (tier,)
+    ).fetchall()
+    conn.close()
+
+    players = [dict(p) for p in players]
+    # Group by (round_wins, round_losses)
+    groups = {}
+    for p in players:
+        key = (p["round_wins"], p["round_losses"])
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(p["name"])
+
+    matchups = []
+    for key, names in groups.items():
+        if len(names) >= 2:
+            matchups.append((names[0], names[1], key))
+
+    return matchups
 
 async def send_announcement(message: str):
     if ANNOUNCEMENT_CHANNEL_ID and ANNOUNCEMENT_CHANNEL_ID != 0:
@@ -131,43 +155,32 @@ async def send_announcement(message: str):
 async def addplayer(interaction: discord.Interaction, name: str, tier: str):
     tier = tier.title()
     if tier not in TIERS:
-        await interaction.response.send_message(
-            f"❌ Invalid tier! Choose from:\n{', '.join(TIERS)}", ephemeral=True
-        )
+        await interaction.response.send_message(f"❌ Invalid tier! Choose from:\n{', '.join(TIERS)}", ephemeral=True)
         return
 
     players_in_tier = get_tier_players(tier)
     if len(players_in_tier) >= 4:
-        await interaction.response.send_message(
-            f"❌ **{tier}** is full! (max 4 players)", ephemeral=True
-        )
+        await interaction.response.send_message(f"❌ **{tier}** is full! (max 4 players)", ephemeral=True)
         return
 
-    existing = get_player(name)
-    if existing:
+    if get_player(name):
         await interaction.response.send_message(f"❌ **{name}** already exists!", ephemeral=True)
         return
 
     rank = len(players_in_tier) + 1
     conn = get_db()
-    conn.execute(
-        "INSERT INTO players (name, tier, rank_in_tier) VALUES (?, ?, ?)",
-        (name, tier, rank)
-    )
+    conn.execute("INSERT INTO players (name, tier, rank_in_tier) VALUES (?, ?, ?)", (name, tier, rank))
     conn.commit()
     conn.close()
-
     await interaction.response.send_message(f"✅ **{name}** added to **{tier}** as rank {rank}!")
 
 @tree.command(name="removeplayer", description="Remove a player (admin only)")
 @is_admin()
 @app_commands.describe(name="Player name")
 async def removeplayer(interaction: discord.Interaction, name: str):
-    player = get_player(name)
-    if not player:
+    if not get_player(name):
         await interaction.response.send_message(f"❌ **{name}** not found!", ephemeral=True)
         return
-
     conn = get_db()
     conn.execute("DELETE FROM players WHERE name = ?", (name,))
     conn.commit()
@@ -194,13 +207,26 @@ async def score(interaction: discord.Interaction, player1: str, goals1: int, pla
     if not p2:
         await interaction.followup.send(f"❌ **{player2}** not found!")
         return
-
     if goals1 == goals2:
-        await interaction.followup.send("❌ Draws are not allowed in this system!")
+        await interaction.followup.send("❌ Draws are not allowed!")
         return
 
-    winner = player1 if goals1 > goals2 else player2
-    loser = player2 if goals1 > goals2 else player1
+    p1 = dict(p1)
+    p2 = dict(p2)
+
+    # Check if these two can face each other (same round W/L record)
+    if (p1["round_wins"], p1["round_losses"]) != (p2["round_wins"], p2["round_losses"]):
+        await interaction.followup.send(
+            f"❌ **{player1}** ({p1['round_wins']}W/{p1['round_losses']}L) and **{player2}** ({p2['round_wins']}W/{p2['round_losses']}L) don't have the same round record and can't face each other yet!"
+        )
+        return
+
+    if p1["round_done"] or p2["round_done"]:
+        await interaction.followup.send("❌ One of these players is already done with this round!")
+        return
+
+    winner_name = player1 if goals1 > goals2 else player2
+    loser_name = player2 if goals1 > goals2 else player1
     winner_goals = max(goals1, goals2)
     loser_goals = min(goals1, goals2)
 
@@ -210,39 +236,62 @@ async def score(interaction: discord.Interaction, player1: str, goals1: int, pla
         (player1, player2, goals1, goals2, datetime.now().isoformat())
     )
 
-    # Update overall stats and round stats
+    # Update overall stats
     conn.execute("""
         UPDATE players SET wins = wins + 1, goals = goals + ?, goals_against = goals_against + ?,
-        round_wins = round_wins + 1
-        WHERE name = ?
-    """, (winner_goals, loser_goals, winner))
+        round_wins = round_wins + 1 WHERE name = ?
+    """, (winner_goals, loser_goals, winner_name))
     conn.execute("""
         UPDATE players SET losses = losses + 1, goals = goals + ?, goals_against = goals_against + ?,
-        round_losses = round_losses + 1
-        WHERE name = ?
-    """, (loser_goals, winner_goals, loser))
+        round_losses = round_losses + 1 WHERE name = ?
+    """, (loser_goals, winner_goals, loser_name))
+
+    conn.commit()
+
+    # Check if winner or loser is now done (2W or 2L)
+    winner = dict(conn.execute("SELECT * FROM players WHERE name = ?", (winner_name,)).fetchone())
+    loser = dict(conn.execute("SELECT * FROM players WHERE name = ?", (loser_name,)).fetchone())
+
+    promo_msg = ""
+    demo_msg = ""
+
+    if winner["round_wins"] >= 2:
+        conn.execute("UPDATE players SET round_done = 1 WHERE name = ?", (winner_name,))
+        promo_msg = f"\n🎉 **{winner_name}** has 2 wins — **PROMOTION** incoming! Use `/updatetier {winner['tier']}` to process."
+
+    if loser["round_losses"] >= 2:
+        conn.execute("UPDATE players SET round_done = 1 WHERE name = ?", (loser_name,))
+        demo_msg = f"\n📉 **{loser_name}** has 2 losses — **DEMOTION** incoming! Use `/updatetier {loser['tier']}` to process."
 
     conn.commit()
     conn.close()
 
-    update_ranks_in_tier(dict(p1)["tier"])
-    if dict(p1)["tier"] != dict(p2)["tier"]:
-        update_ranks_in_tier(dict(p2)["tier"])
+    update_ranks_in_tier(p1["tier"])
 
-    # Show updated round progress for both players
-    w = dict(get_player(winner))
-    l = dict(get_player(loser))
+    # Build response
+    msg = f"⚽ **Match Result**\n"
+    msg += f"🏆 **{winner_name}** {winner_goals} - {loser_goals} **{loser_name}**\n"
+    msg += f"\n📊 **Round Standings — {p1['tier']}:**\n"
 
-    message = f"⚽ **Match Result**\n"
-    message += f"🏆 **{winner}** {winner_goals} - {loser_goals} **{loser}**\n\n"
-    message += f"📊 **Round Progress:**\n"
-    message += f"📈 {winner}: {w['round_wins']}W / {w['round_losses']}L this round\n"
-    message += f"📉 {loser}: {l['round_wins']}W / {l['round_losses']}L this round\n"
-    message += f"\n💡 Use `/updatetier [tier]` when the round is done to process promos and demos."
+    tier_players = get_tier_players(p1["tier"])
+    for p in tier_players:
+        p = dict(p)
+        status = "✅ Done" if p["round_done"] else "🎮 Active"
+        msg += f"• **{p['name']}**: {p['round_wins']}W / {p['round_losses']}L — {status}\n"
 
-    await interaction.followup.send(message)
+    msg += promo_msg
+    msg += demo_msg
 
-@tree.command(name="updatetier", description="Process promos and demos for a tier based on round results (admin only)")
+    # Show next valid matchups
+    matchups = get_valid_matchups(p1["tier"])
+    if matchups:
+        msg += f"\n⚔️ **Next valid matchup(s):**\n"
+        for m in matchups:
+            msg += f"• **{m[0]}** vs **{m[1]}** ({m[2][0]}W/{m[2][1]}L each)\n"
+
+    await interaction.followup.send(msg)
+
+@tree.command(name="updatetier", description="Process promos and demos for a tier (admin only)")
 @is_admin()
 @app_commands.describe(tier="Tier name e.g. Gold 1")
 async def updatetier(interaction: discord.Interaction, tier: str):
@@ -268,49 +317,90 @@ async def updatetier(interaction: discord.Interaction, tier: str):
         rl = p["round_losses"]
 
         if rw >= 2:
-            # Promo
             current_idx = tier_index(p["tier"])
             if current_idx > 0:
                 new_tier = TIERS[current_idx - 1]
                 conn.execute(
-                    "UPDATE players SET tier = ?, round_wins = 0, round_losses = 0 WHERE name = ?",
+                    "UPDATE players SET tier = ?, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?",
                     (new_tier, name)
                 )
-                results.append(f"🎉 **PROMOTION!** {name} moved from **{p['tier']}** to **{new_tier}**!")
+                results.append(f"🎉 **PROMOTION!** {name} → **{new_tier}**")
             else:
-                conn.execute("UPDATE players SET round_wins = 0, round_losses = 0 WHERE name = ?", (name,))
-                results.append(f"🏅 {name} already in the highest tier! Round reset.")
+                conn.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?", (name,))
+                results.append(f"🏅 {name} is already in the highest tier! Round reset.")
         elif rl >= 2:
-            # Demo
             current_idx = tier_index(p["tier"])
             if current_idx < len(TIERS) - 1:
                 new_tier = TIERS[current_idx + 1]
                 conn.execute(
-                    "UPDATE players SET tier = ?, round_wins = 0, round_losses = 0 WHERE name = ?",
+                    "UPDATE players SET tier = ?, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?",
                     (new_tier, name)
                 )
-                results.append(f"📉 **DEMOTION!** {name} moved from **{p['tier']}** to **{new_tier}**!")
+                results.append(f"📉 **DEMOTION!** {name} → **{new_tier}**")
             else:
-                conn.execute("UPDATE players SET round_wins = 0, round_losses = 0 WHERE name = ?", (name,))
-                results.append(f"⚠️ {name} already in the lowest tier! Round reset.")
+                conn.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?", (name,))
+                results.append(f"⚠️ {name} is already in the lowest tier! Round reset.")
         else:
-            conn.execute("UPDATE players SET round_wins = 0, round_losses = 0 WHERE name = ?", (name,))
-            results.append(f"➡️ {name}: {rw}W / {rl}L — no promo or demo. Round reset.")
+            conn.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?", (name,))
+            results.append(f"➡️ {name}: {rw}W / {rl}L — no change. Round reset.")
 
     conn.commit()
     conn.close()
 
-    # Recalculate ranks after moves
-    update_ranks_in_tier(tier)
     for t in TIERS:
         update_ranks_in_tier(t)
 
     embed = discord.Embed(title=f"🔄 Tier Update — {tier}", color=0xff9900)
     embed.description = "\n".join(results)
-    embed.set_footer(text="Round stats have been reset for all players in this tier.")
+    embed.set_footer(text="Round stats reset. New round can begin!")
 
     await interaction.followup.send(embed=embed)
     await send_announcement(embed.description)
+
+@tree.command(name="bracket", description="View the current round bracket for a tier")
+@app_commands.describe(tier="Tier name e.g. Gold 1")
+async def bracket(interaction: discord.Interaction, tier: str):
+    tier = tier.title()
+    if tier not in TIERS:
+        await interaction.response.send_message("❌ Invalid tier!", ephemeral=True)
+        return
+
+    players = get_tier_players(tier)
+    if not players:
+        await interaction.response.send_message(f"**{tier}** is empty.")
+        return
+
+    embed = discord.Embed(title=f"⚔️ Round Bracket — {tier}", color=0xff4444)
+
+    for p in players:
+        p = dict(p)
+        if p["round_done"]:
+            if p["round_wins"] >= 2:
+                status = "✅ PROMO (2W)"
+            else:
+                status = "❌ DEMO (2L)"
+        else:
+            status = f"🎮 {p['round_wins']}W / {p['round_losses']}L"
+
+        embed.add_field(
+            name=p["name"],
+            value=status,
+            inline=True
+        )
+
+    matchups = get_valid_matchups(tier)
+    if matchups:
+        next_matches = "\n".join([f"• **{m[0]}** vs **{m[1]}**" for m in matchups])
+        embed.add_field(name="⚔️ Next Matchup(s)", value=next_matches, inline=False)
+    else:
+        active = [dict(p) for p in players if not dict(p)["round_done"]]
+        if not active:
+            embed.add_field(name="✅ Round Complete!", value="Use `/updatetier` to process promos and demos.", inline=False)
+        else:
+            embed.add_field(name="⏳ Waiting...", value="Not enough players with the same record to make a match yet.", inline=False)
+
+    embed.set_footer(text="2 wins = Promo | 2 losses = Demo")
+    await interaction.response.send_message(embed=embed)
 
 @tree.command(name="tier", description="View all players in a tier")
 @app_commands.describe(tier="Tier name e.g. Gold 1")
@@ -330,13 +420,11 @@ async def view_tier(interaction: discord.Interaction, tier: str):
         p = dict(p)
         total = p["wins"] + p["losses"]
         winrate = round((p["wins"] / total * 100)) if total > 0 else 0
-
         embed.add_field(
             name=f"Rank {p['rank_in_tier']} — {p['name']}",
-            value=f"W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}% | This round: {p['round_wins']}W {p['round_losses']}L",
+            value=f"W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%",
             inline=False
         )
-
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="profile", description="View a player's profile")
@@ -360,48 +448,6 @@ async def profile(interaction: discord.Interaction, name: str):
     embed.add_field(name="Winrate", value=f"{winrate}%", inline=True)
     embed.add_field(name="Matches Played", value=total, inline=True)
     embed.add_field(name="This Round", value=f"{p['round_wins']}W / {p['round_losses']}L", inline=True)
-
-    await interaction.response.send_message(embed=embed)
-
-@tree.command(name="matchups", description="View matchups for a tier")
-@app_commands.describe(tier="Tier name e.g. Gold 1")
-async def matchups(interaction: discord.Interaction, tier: str):
-    tier = tier.title()
-    if tier not in TIERS:
-        await interaction.response.send_message("❌ Invalid tier!", ephemeral=True)
-        return
-
-    players = get_tier_players(tier)
-    if len(players) < 4:
-        await interaction.response.send_message(
-            f"❌ **{tier}** only has {len(players)}/4 players. Can't generate matchups yet."
-        )
-        return
-
-    p = [dict(x) for x in players]
-    embed = discord.Embed(title=f"⚔️ Matchups — {tier}", color=0xff4444)
-    embed.add_field(
-        name="Match 1",
-        value=f"🥇 **{p[0]['name']}** (Rank 1) vs 🥉 **{p[2]['name']}** (Rank 3)",
-        inline=False
-    )
-    embed.add_field(
-        name="Match 2",
-        value=f"🥈 **{p[1]['name']}** (Rank 2) vs 4️⃣ **{p[3]['name']}** (Rank 4)",
-        inline=False
-    )
-    embed.add_field(
-        name="🏆 Winners Round",
-        value="Winner of Match 1 vs Winner of Match 2",
-        inline=False
-    )
-    embed.add_field(
-        name="💀 Losers Round",
-        value="Loser of Match 1 vs Loser of Match 2",
-        inline=False
-    )
-    embed.set_footer(text="Use /updatetier after all matches are done!")
-
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="alltiers", description="Overview of all tiers and their players")
@@ -415,7 +461,6 @@ async def alltiers(interaction: discord.Interaction):
         return
 
     embed = discord.Embed(title="🌍 All Tiers Overview", color=0x00ff88)
-
     tier_data = {}
     for p in all_players:
         p = dict(p)

@@ -479,7 +479,7 @@ async def alltiers(interaction: discord.Interaction):
 
     for tier in TIERS:
         if tier in tier_data:
-            names = " | ".join([f"R{p['rank_in_tier']} {p['name']}" for p in tier_data[tier]])
+            names = chr(10).join([f"R{p['rank_in_tier']} {p['name']}" for p in tier_data[tier]])
             embed.add_field(name=f"**{tier}** ({len(tier_data[tier])}/4)", value=names, inline=False)
 
     await interaction.response.send_message(embed=embed)

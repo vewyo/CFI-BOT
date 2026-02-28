@@ -64,6 +64,19 @@ def setup_db():
             date TEXT
         )
     """)
+    # Clean up old <@id> format names
+    try:
+        c.execute("SELECT name FROM players WHERE name LIKE '<%'")
+        old_names = c.fetchall()
+        for row in old_names:
+            old = row["name"]
+            new = old.strip("<@>")
+            c.execute("UPDATE players SET name = %s WHERE name = %s", (new, old))
+        conn.commit()
+    except Exception as e:
+        print(f"Migration cleanup error: {e}")
+        conn.rollback()
+
     # Add new columns if they don't exist yet (migration)
     try:
         c.execute("ALTER TABLE players ADD COLUMN licensed TEXT DEFAULT 'No'")
@@ -477,7 +490,7 @@ async def view_tier(interaction: discord.Interaction, tier: str):
         return
 
     embed = discord.Embed(title=f"🏅 {tier}", color=0x00aaff)
-    lines = chr(10).join([f"{p['rank_in_tier']}. <@{p['name']}>" for p in players])
+    lines = chr(10).join([f"{p['rank_in_tier']}. <@{p['name'].strip('<@>')}>" for p in players])
     embed.description = lines
     await interaction.response.send_message(embed=embed)
 
@@ -501,13 +514,13 @@ async def profile(interaction: discord.Interaction, player: discord.Member):
     embed.description = (
         f"**Tier:** {p['tier']}\n"
         f"**Current Rank:** {p['rank_in_tier']}\n"
-        f"**Licensed:** {licensed}\n"
-        f"**Playstyle:** {playstyle}\n"
         f"**Wins:** {p['wins']}\n"
         f"**Losses:** {p['losses']}\n"
         f"**Goals Scored:** {p['goals']}\n"
         f"**Winrate:** {winrate}%\n"
-        f"**Matches Played:** {total}"
+        f"**Matches Played:** {total}\n"
+        f"**Licensed:** {licensed}\n"
+        f"**Playstyle:** {playstyle}"
     )
     await interaction.response.send_message(embed=embed)
 
@@ -536,7 +549,8 @@ async def alltiers(interaction: discord.Interaction):
             for p in tier_data[tier]:
                 total = p["wins"] + p["losses"]
                 winrate = round((p["wins"] / total * 100)) if total > 0 else 0
-                lines.append(f"**Rank {p['rank_in_tier']} — <@{p['name']}>**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+                raw = p["name"].strip("<@>")
+                lines.append(f"**Rank {p['rank_in_tier']} — <@{raw}>**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
             embed.add_field(name=f"**{tier}**", value="\n\n".join(lines), inline=False)
 
     await interaction.response.send_message(embed=embed)

@@ -154,9 +154,17 @@ async def tier_autocomplete(interaction: discord.Interaction, current: str):
 
 @tree.command(name="addplayer", description="Add a player to a tier (admin only)")
 @is_admin()
-@app_commands.describe(player="Select a Discord user", tier="Select a tier", rank="Rank in tier 1-4 (optional)")
+@app_commands.describe(
+    player="Select a Discord user",
+    tier="Select a tier",
+    rank="Rank in tier 1-4 (optional)",
+    wins="Starting wins (optional)",
+    losses="Starting losses (optional)",
+    goals="Starting goals (optional)"
+)
 @app_commands.autocomplete(tier=tier_autocomplete)
-async def addplayer(interaction: discord.Interaction, player: discord.Member, tier: str, rank: int = None):
+async def addplayer(interaction: discord.Interaction, player: discord.Member, tier: str,
+                    rank: int = None, wins: int = None, losses: int = None, goals: int = None):
     tier = tier.title()
     if tier not in TIERS:
         await interaction.response.send_message("❌ Invalid tier!", ephemeral=True)
@@ -181,9 +189,16 @@ async def addplayer(interaction: discord.Interaction, player: discord.Member, ti
         await interaction.response.send_message("❌ Rank must be between 1 and 4!", ephemeral=True)
         return
 
+    w = wins if wins is not None else 0
+    l = losses if losses is not None else 0
+    g = goals if goals is not None else 0
+
     conn = get_db()
     c = conn.cursor()
-    c.execute("INSERT INTO players (name, tier, rank_in_tier) VALUES (%s, %s, %s)", (name, tier, rank))
+    c.execute(
+        "INSERT INTO players (name, tier, rank_in_tier, wins, losses, goals) VALUES (%s, %s, %s, %s, %s, %s)",
+        (name, tier, rank, w, l, g)
+    )
     conn.commit()
     conn.close()
     await interaction.response.send_message(f"✅ **{display}** added to **{tier}** as rank {rank}!")
@@ -633,6 +648,101 @@ async def setstats(interaction: discord.Interaction, player: discord.Member,
     if rank is not None: changed.append(f"Rank: {rank}")
 
     await interaction.response.send_message(f"✅ Updated <@{uid}>: {' | '.join(changed)}")
+
+
+@tree.command(name="removeandfill", description="Remove a player and cascade ranks down through all tiers (admin only)")
+@is_admin()
+@app_commands.describe(player="Select the player to remove")
+async def removeandfill(interaction: discord.Interaction, player: discord.Member):
+    await interaction.response.defer()
+
+    uid = str(player.id)
+    display = player.display_name
+    p = get_player(uid)
+    if not p:
+        await interaction.followup.send(f"❌ **{display}** not found!")
+        return
+
+    removed_tier = p["tier"]
+    removed_rank = p["rank_in_tier"]
+
+    conn = get_db()
+    c = conn.cursor()
+
+    # Remove the player
+    c.execute("DELETE FROM players WHERE name = %s", (uid,))
+    conn.commit()
+    conn.close()
+
+    log = [f"🗑️ **{display}** removed from **{removed_tier}** (Rank {removed_rank})"]
+
+    # Cascade: for each tier starting from removed_tier going down
+    current_tier_idx = tier_index(removed_tier)
+
+    while current_tier_idx < len(TIERS) - 1:
+        current_tier = TIERS[current_tier_idx]
+        next_tier = TIERS[current_tier_idx + 1]
+
+        # Re-rank current tier (fill gaps)
+        players_in_current = get_tier_players(current_tier)
+        conn = get_db()
+        c = conn.cursor()
+        for i, p in enumerate(players_in_current):
+            c.execute("UPDATE players SET rank_in_tier = %s WHERE name = %s", (i + 1, p["name"]))
+        conn.commit()
+        conn.close()
+
+        # Check if current tier now has less than 4 players
+        players_in_current = get_tier_players(current_tier)
+        if len(players_in_current) >= 4:
+            break
+
+        # Get rank 1 player from next tier
+        players_in_next = get_tier_players(next_tier)
+        if not players_in_next:
+            log.append(f"⚠️ **{next_tier}** is empty, no one to promote.")
+            break
+
+        promoted = players_in_next[0]
+        new_rank = len(players_in_current) + 1
+
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "UPDATE players SET tier = %s, rank_in_tier = %s, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s",
+            (current_tier, new_rank, promoted["name"])
+        )
+        conn.commit()
+        conn.close()
+
+        log.append(f"⬆️ <@{promoted['name']}> moved from **{next_tier}** rank 1 → **{current_tier}** rank {new_rank}")
+
+        # Re-rank next tier
+        players_in_next = get_tier_players(next_tier)
+        conn = get_db()
+        c = conn.cursor()
+        for i, p in enumerate(players_in_next):
+            c.execute("UPDATE players SET rank_in_tier = %s WHERE name = %s", (i + 1, p["name"]))
+        conn.commit()
+        conn.close()
+
+        current_tier_idx += 1
+
+    # Final re-rank of last tier
+    last_tier = TIERS[-1]
+    players_last = get_tier_players(last_tier)
+    conn = get_db()
+    c = conn.cursor()
+    for i, p in enumerate(players_last):
+        c.execute("UPDATE players SET rank_in_tier = %s WHERE name = %s", (i + 1, p["name"]))
+    conn.commit()
+    conn.close()
+
+    log.append(f"\n✅ A spot is now open in **{TIERS[-1]}**. Use `/addplayer` to fill it!")
+
+    embed = discord.Embed(title="🔄 Player Removed — Ranks Cascaded", color=0xff4444)
+    embed.description = "\n".join(log)
+    await interaction.followup.send(embed=embed)
 
 # ─────────────────────────────────────────
 # BOT EVENTS

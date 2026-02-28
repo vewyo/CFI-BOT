@@ -561,6 +561,79 @@ async def updateall(interaction: discord.Interaction):
     embed.set_footer(text="All round stats reset. New round can begin!")
     await interaction.followup.send(embed=embed)
 
+
+@tree.command(name="setstats", description="Manually update a player's stats (admin only)")
+@is_admin()
+@app_commands.describe(
+    player="Select a player",
+    wins="New win count",
+    losses="New loss count",
+    goals="New goals scored count",
+    tier="New tier",
+    rank="New rank in tier (1-4)"
+)
+@app_commands.autocomplete(tier=tier_autocomplete)
+async def setstats(interaction: discord.Interaction, player: discord.Member,
+                   wins: int = None, losses: int = None, goals: int = None,
+                   tier: str = None, rank: int = None):
+    uid = str(player.id)
+    display = player.display_name
+    p = get_player(uid)
+    if not p:
+        await interaction.response.send_message(f"❌ **{display}** not found!", ephemeral=True)
+        return
+
+    if tier is not None:
+        tier = tier.title()
+        if tier not in TIERS:
+            await interaction.response.send_message("❌ Invalid tier!", ephemeral=True)
+            return
+
+    if rank is not None and (rank < 1 or rank > 4):
+        await interaction.response.send_message("❌ Rank must be between 1 and 4!", ephemeral=True)
+        return
+
+    updates = []
+    values = []
+
+    if wins is not None:
+        updates.append("wins = %s")
+        values.append(wins)
+    if losses is not None:
+        updates.append("losses = %s")
+        values.append(losses)
+    if goals is not None:
+        updates.append("goals = %s")
+        values.append(goals)
+    if tier is not None:
+        updates.append("tier = %s")
+        values.append(tier)
+    if rank is not None:
+        updates.append("rank_in_tier = %s")
+        values.append(rank)
+
+    if not updates:
+        await interaction.response.send_message("❌ You didn't change anything!", ephemeral=True)
+        return
+
+    values.append(uid)
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(f"UPDATE players SET {', '.join(updates)} WHERE name = %s", values)
+    conn.commit()
+    conn.close()
+
+    update_ranks_in_tier(tier if tier else p["tier"])
+
+    changed = []
+    if wins is not None: changed.append(f"Wins: {wins}")
+    if losses is not None: changed.append(f"Losses: {losses}")
+    if goals is not None: changed.append(f"Goals: {goals}")
+    if tier is not None: changed.append(f"Tier: {tier}")
+    if rank is not None: changed.append(f"Rank: {rank}")
+
+    await interaction.response.send_message(f"✅ Updated <@{uid}>: {' | '.join(changed)}")
+
 # ─────────────────────────────────────────
 # BOT EVENTS
 # ─────────────────────────────────────────

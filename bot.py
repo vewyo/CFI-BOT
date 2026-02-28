@@ -445,12 +445,8 @@ async def view_tier(interaction: discord.Interaction, tier: str):
         return
 
     embed = discord.Embed(title=f"🏅 {tier}", color=0x00aaff)
-    lines = []
-    for p in players:
-        total = p["wins"] + p["losses"]
-        winrate = round((p["wins"] / total * 100)) if total > 0 else 0
-        lines.append(f"**Rank {p['rank_in_tier']} — <@{p['name']}>**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
-    embed.description = "\n\n".join(lines)
+    lines = chr(10).join([f"{p['rank_in_tier']}. <@{p['name']}>" for p in players])
+    embed.description = lines
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="profile", description="View a player's profile")
@@ -499,8 +495,12 @@ async def alltiers(interaction: discord.Interaction):
 
     for tier in TIERS:
         if tier in tier_data:
-            lines = "\n".join([f"{p['rank_in_tier']}. <@{p['name']}>" for p in tier_data[tier]])
-            embed.add_field(name=f"**{tier}**", value=lines, inline=False)
+            lines = []
+            for p in tier_data[tier]:
+                total = p["wins"] + p["losses"]
+                winrate = round((p["wins"] / total * 100)) if total > 0 else 0
+                lines.append(f"**Rank {p['rank_in_tier']} — <@{p['name']}>**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+            embed.add_field(name=f"**{tier}**", value="\n\n".join(lines), inline=False)
 
     await interaction.response.send_message(embed=embed)
 

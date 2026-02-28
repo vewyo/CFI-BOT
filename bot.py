@@ -167,10 +167,11 @@ async def addplayer(interaction: discord.Interaction, player: discord.Member, ti
         await interaction.response.send_message(f"❌ **{tier}** is full! (max 4 players)", ephemeral=True)
         return
 
-    name = player.display_name
+    name = str(player.id)
+    display = player.display_name
 
     if get_player(name):
-        await interaction.response.send_message(f"❌ **{name}** already exists!", ephemeral=True)
+        await interaction.response.send_message(f"❌ **{display}** already exists!", ephemeral=True)
         return
 
     if rank is None:
@@ -185,22 +186,23 @@ async def addplayer(interaction: discord.Interaction, player: discord.Member, ti
     c.execute("INSERT INTO players (name, tier, rank_in_tier) VALUES (%s, %s, %s)", (name, tier, rank))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"✅ **{name}** added to **{tier}** as rank {rank}!")
+    await interaction.response.send_message(f"✅ **{display}** added to **{tier}** as rank {rank}!")
 
 @tree.command(name="removeplayer", description="Remove a player (admin only)")
 @is_admin()
 @app_commands.describe(player="Select a Discord user")
 async def removeplayer(interaction: discord.Interaction, player: discord.Member):
-    name = player.display_name
+    name = str(player.id)
+    display = player.display_name
     if not get_player(name):
-        await interaction.response.send_message(f"❌ **{name}** not found!", ephemeral=True)
+        await interaction.response.send_message(f"❌ **{display}** not found!", ephemeral=True)
         return
     conn = get_db()
     c = conn.cursor()
     c.execute("DELETE FROM players WHERE name = %s", (name,))
     conn.commit()
     conn.close()
-    await interaction.response.send_message(f"🗑️ **{name}** removed.")
+    await interaction.response.send_message(f"🗑️ **{display}** removed.")
 
 @tree.command(name="score", description="Submit a match score (admin only)")
 @is_admin()
@@ -213,8 +215,8 @@ async def removeplayer(interaction: discord.Interaction, player: discord.Member)
 async def score(interaction: discord.Interaction, player1: discord.Member, goals1: int, player2: discord.Member, goals2: int):
     await interaction.response.defer()
 
-    name1 = player1.display_name
-    name2 = player2.display_name
+    name1 = str(player1.id)
+    name2 = str(player2.id)
 
     p1 = get_player(name1)
     p2 = get_player(name2)
@@ -290,7 +292,7 @@ async def score(interaction: discord.Interaction, player1: discord.Member, goals
     tier_players = get_tier_players(p1["tier"])
     for p in tier_players:
         status = "✅ Done" if p["round_done"] else "🎮 Active"
-        msg += f"• **{p['name']}**: {p['round_wins']}W / {p['round_losses']}L — {status}\n"
+        msg += f"• <@{p['name']}>: {p['round_wins']}W / {p['round_losses']}L — {status}\n"
 
     msg += promo_msg
     msg += demo_msg
@@ -439,8 +441,9 @@ async def view_tier(interaction: discord.Interaction, tier: str):
 @tree.command(name="profile", description="View a player's profile")
 @app_commands.describe(player="Select a player")
 async def profile(interaction: discord.Interaction, player: discord.Member):
+    uid = str(player.id)
     display_name = player.display_name
-    p = get_player(display_name)
+    p = get_player(uid)
     if not p:
         await interaction.response.send_message(f"❌ **{display_name}** not found!", ephemeral=True)
         return
@@ -482,7 +485,7 @@ async def alltiers(interaction: discord.Interaction):
 
     for tier in TIERS:
         if tier in tier_data:
-            lines = "\n".join([f"{p['rank_in_tier']}. {p['name']}" for p in tier_data[tier]])
+            lines = "\n".join([f"{p['rank_in_tier']}. <@{p['name']}>" for p in tier_data[tier]])
             embed.add_field(name=f"**{tier}**", value=lines, inline=False)
 
     await interaction.response.send_message(embed=embed)

@@ -9,7 +9,7 @@ from datetime import datetime
 # SETTINGS - CHANGE THESE
 # ─────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_ROLE_NAME = "Admin"
+ADMIN_ROLES = ["Admin", "CFI-Dev"]
 ANNOUNCEMENT_CHANNEL_ID = 0
 # ─────────────────────────────────────────
 
@@ -70,8 +70,8 @@ def setup_db():
 # ─────────────────────────────────────────
 def is_admin():
     async def predicate(interaction: discord.Interaction):
-        role = discord.utils.get(interaction.user.roles, name=ADMIN_ROLE_NAME)
-        if role is None:
+        user_roles = [role.name for role in interaction.user.roles]
+        if not any(r in user_roles for r in ADMIN_ROLES):
             await interaction.response.send_message("❌ You don't have admin permissions!", ephemeral=True)
             return False
         return True
@@ -149,9 +149,16 @@ async def send_announcement(message: str):
 # SLASH COMMANDS
 # ─────────────────────────────────────────
 
+async def tier_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name=tier, value=tier)
+        for tier in TIERS if current.lower() in tier.lower()
+    ]
+
 @tree.command(name="addplayer", description="Add a player to a tier (admin only)")
 @is_admin()
-@app_commands.describe(name="Player name", tier="Tier name e.g. Gold 1")
+@app_commands.describe(name="Player name", tier="Select a tier")
+@app_commands.autocomplete(tier=tier_autocomplete)
 async def addplayer(interaction: discord.Interaction, name: str, tier: str):
     tier = tier.title()
     if tier not in TIERS:
@@ -358,7 +365,8 @@ async def updatetier(interaction: discord.Interaction, tier: str):
     await send_announcement(embed.description)
 
 @tree.command(name="bracket", description="View the current round bracket for a tier")
-@app_commands.describe(tier="Tier name e.g. Gold 1")
+@app_commands.describe(tier="Select a tier")
+@app_commands.autocomplete(tier=tier_autocomplete)
 async def bracket(interaction: discord.Interaction, tier: str):
     tier = tier.title()
     if tier not in TIERS:
@@ -403,7 +411,8 @@ async def bracket(interaction: discord.Interaction, tier: str):
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="tier", description="View all players in a tier")
-@app_commands.describe(tier="Tier name e.g. Gold 1")
+@app_commands.describe(tier="Select a tier")
+@app_commands.autocomplete(tier=tier_autocomplete)
 async def view_tier(interaction: discord.Interaction, tier: str):
     tier = tier.title()
     if tier not in TIERS:

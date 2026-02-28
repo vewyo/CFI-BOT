@@ -1,9 +1,10 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import sqlite3
 import os
 from datetime import datetime
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # ─────────────────────────────────────────
 # SETTINGS - CHANGE THESE
@@ -31,8 +32,7 @@ tree = bot.tree
 # DATABASE
 # ─────────────────────────────────────────
 def get_db():
-    conn = sqlite3.connect("inazuma.db")
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(os.environ.get("DATABASE_URL"), cursor_factory=RealDictCursor)
     return conn
 
 def setup_db():
@@ -54,7 +54,7 @@ def setup_db():
     """)
     c.execute("""
         CREATE TABLE IF NOT EXISTS matches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             player1 TEXT,
             player2 TEXT,
             score1 INTEGER,
@@ -79,9 +79,11 @@ def is_admin():
 
 def get_player(name: str):
     conn = get_db()
-    p = conn.execute("SELECT * FROM players WHERE name = ?", (name,)).fetchone()
+    c = conn.cursor()
+    c.execute("SELECT * FROM players WHERE name = %s", (name,))
+    p = c.fetchone()
     conn.close()
-    return p
+    return dict(p) if p else None
 
 def tier_index(tier: str):
     try:
@@ -91,15 +93,17 @@ def tier_index(tier: str):
 
 def get_tier_players(tier: str):
     conn = get_db()
-    players = conn.execute(
-        "SELECT * FROM players WHERE tier = ? ORDER BY rank_in_tier ASC", (tier,)
-    ).fetchall()
+    c = conn.cursor()
+    c.execute("SELECT * FROM players WHERE tier = %s ORDER BY rank_in_tier ASC", (tier,))
+    players = c.fetchall()
     conn.close()
-    return players
+    return [dict(p) for p in players]
 
 def update_ranks_in_tier(tier: str):
     conn = get_db()
-    players = conn.execute("SELECT name, wins, losses FROM players WHERE tier = ?", (tier,)).fetchall()
+    c = conn.cursor()
+    c.execute("SELECT name, wins, losses FROM players WHERE tier = %s", (tier,))
+    players = [dict(p) for p in c.fetchall()]
 
     def score(p):
         total = p["wins"] + p["losses"]
@@ -107,7 +111,7 @@ def update_ranks_in_tier(tier: str):
 
     sorted_players = sorted(players, key=score, reverse=True)
     for i, p in enumerate(sorted_players):
-        conn.execute("UPDATE players SET rank_in_tier = ? WHERE name = ?", (i + 1, p["name"]))
+        c.execute("UPDATE players SET rank_in_tier = %s WHERE name = %s", (i + 1, p["name"]))
     conn.commit()
     conn.close()
 
@@ -118,12 +122,10 @@ def get_valid_matchups(tier: str):
     Players with 2W or 2L are done for the round.
     """
     conn = get_db()
-    players = conn.execute(
-        "SELECT * FROM players WHERE tier = ? AND round_done = 0", (tier,)
-    ).fetchall()
+    c = conn.cursor()
+    c.execute("SELECT * FROM players WHERE tier = %s AND round_done = 0", (tier,))
+    players = [dict(p) for p in c.fetchall()]
     conn.close()
-
-    players = [dict(p) for p in players]
     # Group by (round_wins, round_losses)
     groups = {}
     for p in players:
@@ -176,7 +178,8 @@ async def addplayer(interaction: discord.Interaction, name: str, tier: str):
 
     rank = len(players_in_tier) + 1
     conn = get_db()
-    conn.execute("INSERT INTO players (name, tier, rank_in_tier) VALUES (?, ?, ?)", (name, tier, rank))
+    c = conn.cursor()
+    c.execute("INSERT INTO players (name, tier, rank_in_tier) VALUES (%s, %s, %s)", (name, tier, rank))
     conn.commit()
     conn.close()
     await interaction.response.send_message(f"✅ **{name}** added to **{tier}** as rank {rank}!")
@@ -189,7 +192,8 @@ async def removeplayer(interaction: discord.Interaction, name: str):
         await interaction.response.send_message(f"❌ **{name}** not found!", ephemeral=True)
         return
     conn = get_db()
-    conn.execute("DELETE FROM players WHERE name = ?", (name,))
+    c = conn.cursor()
+    c.execute("DELETE FROM players WHERE name = %s", (name,))
     conn.commit()
     conn.close()
     await interaction.response.send_message(f"🗑️ **{name}** removed.")
@@ -238,36 +242,39 @@ async def score(interaction: discord.Interaction, player1: str, goals1: int, pla
     loser_goals = min(goals1, goals2)
 
     conn = get_db()
-    conn.execute(
-        "INSERT INTO matches (player1, player2, score1, score2, date) VALUES (?, ?, ?, ?, ?)",
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO matches (player1, player2, score1, score2, date) VALUES (%s, %s, %s, %s, %s)",
         (player1, player2, goals1, goals2, datetime.now().isoformat())
     )
 
     # Update overall stats
-    conn.execute("""
-        UPDATE players SET wins = wins + 1, goals = goals + ?, goals_against = goals_against + ?,
-        round_wins = round_wins + 1 WHERE name = ?
+    c.execute("""
+        UPDATE players SET wins = wins + 1, goals = goals + %s, goals_against = goals_against + %s,
+        round_wins = round_wins + 1 WHERE name = %s
     """, (winner_goals, loser_goals, winner_name))
-    conn.execute("""
-        UPDATE players SET losses = losses + 1, goals = goals + ?, goals_against = goals_against + ?,
-        round_losses = round_losses + 1 WHERE name = ?
+    c.execute("""
+        UPDATE players SET losses = losses + 1, goals = goals + %s, goals_against = goals_against + %s,
+        round_losses = round_losses + 1 WHERE name = %s
     """, (loser_goals, winner_goals, loser_name))
 
     conn.commit()
 
     # Check if winner or loser is now done (2W or 2L)
-    winner = dict(conn.execute("SELECT * FROM players WHERE name = ?", (winner_name,)).fetchone())
-    loser = dict(conn.execute("SELECT * FROM players WHERE name = ?", (loser_name,)).fetchone())
+    c.execute("SELECT * FROM players WHERE name = %s", (winner_name,))
+    winner = dict(c.fetchone())
+    c.execute("SELECT * FROM players WHERE name = %s", (loser_name,))
+    loser = dict(c.fetchone())
 
     promo_msg = ""
     demo_msg = ""
 
     if winner["round_wins"] >= 2:
-        conn.execute("UPDATE players SET round_done = 1 WHERE name = ?", (winner_name,))
+        c.execute("UPDATE players SET round_done = 1 WHERE name = %s", (winner_name,))
         promo_msg = f"\n🎉 **{winner_name}** has 2 wins — **PROMOTION** incoming! Use `/updatetier {winner['tier']}` to process."
 
     if loser["round_losses"] >= 2:
-        conn.execute("UPDATE players SET round_done = 1 WHERE name = ?", (loser_name,))
+        c.execute("UPDATE players SET round_done = 1 WHERE name = %s", (loser_name,))
         demo_msg = f"\n📉 **{loser_name}** has 2 losses — **DEMOTION** incoming! Use `/updatetier {loser['tier']}` to process."
 
     conn.commit()
@@ -316,9 +323,9 @@ async def updatetier(interaction: discord.Interaction, tier: str):
 
     results = []
     conn = get_db()
+    c = conn.cursor()
 
     for p in players:
-        p = dict(p)
         name = p["name"]
         rw = p["round_wins"]
         rl = p["round_losses"]
@@ -327,28 +334,28 @@ async def updatetier(interaction: discord.Interaction, tier: str):
             current_idx = tier_index(p["tier"])
             if current_idx > 0:
                 new_tier = TIERS[current_idx - 1]
-                conn.execute(
-                    "UPDATE players SET tier = ?, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?",
+                c.execute(
+                    "UPDATE players SET tier = %s, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s",
                     (new_tier, name)
                 )
                 results.append(f"🎉 **PROMOTION!** {name} → **{new_tier}**")
             else:
-                conn.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?", (name,))
+                c.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s", (name,))
                 results.append(f"🏅 {name} is already in the highest tier! Round reset.")
         elif rl >= 2:
             current_idx = tier_index(p["tier"])
             if current_idx < len(TIERS) - 1:
                 new_tier = TIERS[current_idx + 1]
-                conn.execute(
-                    "UPDATE players SET tier = ?, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?",
+                c.execute(
+                    "UPDATE players SET tier = %s, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s",
                     (new_tier, name)
                 )
                 results.append(f"📉 **DEMOTION!** {name} → **{new_tier}**")
             else:
-                conn.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?", (name,))
+                c.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s", (name,))
                 results.append(f"⚠️ {name} is already in the lowest tier! Round reset.")
         else:
-            conn.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = ?", (name,))
+            c.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s", (name,))
             results.append(f"➡️ {name}: {rw}W / {rl}L — no change. Round reset.")
 
     conn.commit()
@@ -462,7 +469,9 @@ async def profile(interaction: discord.Interaction, name: str):
 @tree.command(name="alltiers", description="Overview of all tiers and their players")
 async def alltiers(interaction: discord.Interaction):
     conn = get_db()
-    all_players = conn.execute("SELECT * FROM players ORDER BY rank_in_tier").fetchall()
+    c = conn.cursor()
+    c.execute("SELECT * FROM players ORDER BY rank_in_tier")
+    all_players = [dict(p) for p in c.fetchall()]
     conn.close()
 
     if not all_players:
@@ -472,7 +481,6 @@ async def alltiers(interaction: discord.Interaction):
     embed = discord.Embed(title="🌍 All Tiers Overview", color=0x00ff88)
     tier_data = {}
     for p in all_players:
-        p = dict(p)
         if p["tier"] not in tier_data:
             tier_data[p["tier"]] = []
         tier_data[p["tier"]].append(p)

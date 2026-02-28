@@ -9,7 +9,7 @@ from datetime import datetime
 # SETTINGS - CHANGE THESE
 # ─────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_ROLES = ["Admin", "CFI-Dev"]
+ADMIN_ROLES = ["Admin", "CFI - Dev"]
 ANNOUNCEMENT_CHANNEL_ID = 0
 # ─────────────────────────────────────────
 

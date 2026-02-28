@@ -750,10 +750,12 @@ async def removeandfill(interaction: discord.Interaction, player: discord.Member
 @bot.event
 async def on_ready():
     setup_db()
+    tree.clear_commands(guild=None)
     await tree.sync()
+    synced = await tree.sync()
     print(f"✅ Bot is online as {bot.user}!")
     print(f"📊 Database ready")
-    print(f"🎮 Slash commands synced")
+    print(f"🎮 Slash commands synced: {len(synced)} commands")
 
 from flask import Flask
 from threading import Thread

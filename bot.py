@@ -161,6 +161,12 @@ async def send_announcement(message: str):
 
 PLAYSTYLES = ["Super Defensive", "Defensive", "Controlling", "Balanced", "Offensive", "Very Offensive"]
 
+async def licensed_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name=l, value=l)
+        for l in ["Yes", "No"] if current.lower() in l.lower()
+    ]
+
 async def playstyle_autocomplete(interaction: discord.Interaction, current: str):
     return [
         app_commands.Choice(name=p, value=p)
@@ -185,7 +191,7 @@ async def tier_autocomplete(interaction: discord.Interaction, current: str):
     licensed="Is the player licensed? Yes or No",
     playstyle="Player playstyle"
 )
-@app_commands.autocomplete(tier=tier_autocomplete, playstyle=playstyle_autocomplete)
+@app_commands.autocomplete(tier=tier_autocomplete, licensed=licensed_autocomplete, playstyle=playstyle_autocomplete)
 async def addplayer(interaction: discord.Interaction, player: discord.Member, tier: str,
                     rank: int = None, wins: int = None, losses: int = None, goals: int = None,
                     licensed: str = None, playstyle: str = None):
@@ -620,7 +626,7 @@ async def updateall(interaction: discord.Interaction):
     licensed="Is the player licensed? Yes or No",
     playstyle="Player playstyle"
 )
-@app_commands.autocomplete(tier=tier_autocomplete, playstyle=playstyle_autocomplete)
+@app_commands.autocomplete(tier=tier_autocomplete, licensed=licensed_autocomplete, playstyle=playstyle_autocomplete)
 async def setstats(interaction: discord.Interaction, player: discord.Member,
                    wins: int = None, losses: int = None, goals: int = None,
                    tier: str = None, rank: int = None, licensed: str = None, playstyle: str = None):

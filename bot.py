@@ -7,7 +7,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 # ─────────────────────────────────────────
-# SETTINGS - CHANGE THESE
+# SETTINGS
 # ─────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 ADMIN_ROLES = ["Admin", "CFI - Dev"]
@@ -116,17 +116,12 @@ def update_ranks_in_tier(tier: str):
     conn.close()
 
 def get_valid_matchups(tier: str):
-    """
-    Returns list of valid matchups based on round_wins and round_losses.
-    Players can only face someone with the same W/L record.
-    Players with 2W or 2L are done for the round.
-    """
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT * FROM players WHERE tier = %s AND round_done = 0", (tier,))
     players = [dict(p) for p in c.fetchall()]
     conn.close()
-    # Group by (round_wins, round_losses)
+
     groups = {}
     for p in players:
         key = (p["round_wins"], p["round_losses"])
@@ -159,12 +154,12 @@ async def tier_autocomplete(interaction: discord.Interaction, current: str):
 
 @tree.command(name="addplayer", description="Add a player to a tier (admin only)")
 @is_admin()
-@app_commands.describe(name="Player name", tier="Select a tier")
+@app_commands.describe(player="Select a Discord user", tier="Select a tier", rank="Rank in tier 1-4 (optional)")
 @app_commands.autocomplete(tier=tier_autocomplete)
-async def addplayer(interaction: discord.Interaction, name: str, tier: str):
+async def addplayer(interaction: discord.Interaction, player: discord.Member, tier: str, rank: int = None):
     tier = tier.title()
     if tier not in TIERS:
-        await interaction.response.send_message(f"❌ Invalid tier! Choose from:\n{', '.join(TIERS)}", ephemeral=True)
+        await interaction.response.send_message("❌ Invalid tier!", ephemeral=True)
         return
 
     players_in_tier = get_tier_players(tier)
@@ -172,11 +167,19 @@ async def addplayer(interaction: discord.Interaction, name: str, tier: str):
         await interaction.response.send_message(f"❌ **{tier}** is full! (max 4 players)", ephemeral=True)
         return
 
+    name = player.display_name
+
     if get_player(name):
         await interaction.response.send_message(f"❌ **{name}** already exists!", ephemeral=True)
         return
 
-    rank = len(players_in_tier) + 1
+    if rank is None:
+        rank = len(players_in_tier) + 1
+
+    if rank < 1 or rank > 4:
+        await interaction.response.send_message("❌ Rank must be between 1 and 4!", ephemeral=True)
+        return
+
     conn = get_db()
     c = conn.cursor()
     c.execute("INSERT INTO players (name, tier, rank_in_tier) VALUES (%s, %s, %s)", (name, tier, rank))
@@ -186,8 +189,9 @@ async def addplayer(interaction: discord.Interaction, name: str, tier: str):
 
 @tree.command(name="removeplayer", description="Remove a player (admin only)")
 @is_admin()
-@app_commands.describe(name="Player name")
-async def removeplayer(interaction: discord.Interaction, name: str):
+@app_commands.describe(player="Select a Discord user")
+async def removeplayer(interaction: discord.Interaction, player: discord.Member):
+    name = player.display_name
     if not get_player(name):
         await interaction.response.send_message(f"❌ **{name}** not found!", ephemeral=True)
         return
@@ -201,34 +205,33 @@ async def removeplayer(interaction: discord.Interaction, name: str):
 @tree.command(name="score", description="Submit a match score (admin only)")
 @is_admin()
 @app_commands.describe(
-    player1="Name of player 1",
+    player1="Select player 1",
     goals1="Goals scored by player 1",
-    player2="Name of player 2",
+    player2="Select player 2",
     goals2="Goals scored by player 2"
 )
-async def score(interaction: discord.Interaction, player1: str, goals1: int, player2: str, goals2: int):
+async def score(interaction: discord.Interaction, player1: discord.Member, goals1: int, player2: discord.Member, goals2: int):
     await interaction.response.defer()
 
-    p1 = get_player(player1)
-    p2 = get_player(player2)
+    name1 = player1.display_name
+    name2 = player2.display_name
+
+    p1 = get_player(name1)
+    p2 = get_player(name2)
 
     if not p1:
-        await interaction.followup.send(f"❌ **{player1}** not found!")
+        await interaction.followup.send(f"❌ **{name1}** not found!")
         return
     if not p2:
-        await interaction.followup.send(f"❌ **{player2}** not found!")
+        await interaction.followup.send(f"❌ **{name2}** not found!")
         return
     if goals1 == goals2:
         await interaction.followup.send("❌ Draws are not allowed!")
         return
 
-    p1 = dict(p1)
-    p2 = dict(p2)
-
-    # Check if these two can face each other (same round W/L record)
     if (p1["round_wins"], p1["round_losses"]) != (p2["round_wins"], p2["round_losses"]):
         await interaction.followup.send(
-            f"❌ **{player1}** ({p1['round_wins']}W/{p1['round_losses']}L) and **{player2}** ({p2['round_wins']}W/{p2['round_losses']}L) don't have the same round record and can't face each other yet!"
+            f"❌ **{name1}** ({p1['round_wins']}W/{p1['round_losses']}L) and **{name2}** ({p2['round_wins']}W/{p2['round_losses']}L) don't have the same round record and can't face each other yet!"
         )
         return
 
@@ -236,8 +239,8 @@ async def score(interaction: discord.Interaction, player1: str, goals1: int, pla
         await interaction.followup.send("❌ One of these players is already done with this round!")
         return
 
-    winner_name = player1 if goals1 > goals2 else player2
-    loser_name = player2 if goals1 > goals2 else player1
+    winner_name = name1 if goals1 > goals2 else name2
+    loser_name = name2 if goals1 > goals2 else name1
     winner_goals = max(goals1, goals2)
     loser_goals = min(goals1, goals2)
 
@@ -245,10 +248,9 @@ async def score(interaction: discord.Interaction, player1: str, goals1: int, pla
     c = conn.cursor()
     c.execute(
         "INSERT INTO matches (player1, player2, score1, score2, date) VALUES (%s, %s, %s, %s, %s)",
-        (player1, player2, goals1, goals2, datetime.now().isoformat())
+        (name1, name2, goals1, goals2, datetime.now().isoformat())
     )
 
-    # Update overall stats
     c.execute("""
         UPDATE players SET wins = wins + 1, goals = goals + %s, goals_against = goals_against + %s,
         round_wins = round_wins + 1 WHERE name = %s
@@ -260,7 +262,6 @@ async def score(interaction: discord.Interaction, player1: str, goals1: int, pla
 
     conn.commit()
 
-    # Check if winner or loser is now done (2W or 2L)
     c.execute("SELECT * FROM players WHERE name = %s", (winner_name,))
     winner = dict(c.fetchone())
     c.execute("SELECT * FROM players WHERE name = %s", (loser_name,))
@@ -282,21 +283,18 @@ async def score(interaction: discord.Interaction, player1: str, goals1: int, pla
 
     update_ranks_in_tier(p1["tier"])
 
-    # Build response
     msg = f"⚽ **Match Result**\n"
     msg += f"🏆 **{winner_name}** {winner_goals} - {loser_goals} **{loser_name}**\n"
     msg += f"\n📊 **Round Standings — {p1['tier']}:**\n"
 
     tier_players = get_tier_players(p1["tier"])
     for p in tier_players:
-        p = dict(p)
         status = "✅ Done" if p["round_done"] else "🎮 Active"
         msg += f"• **{p['name']}**: {p['round_wins']}W / {p['round_losses']}L — {status}\n"
 
     msg += promo_msg
     msg += demo_msg
 
-    # Show next valid matchups
     matchups = get_valid_matchups(p1["tier"])
     if matchups:
         msg += f"\n⚔️ **Next valid matchup(s):**\n"
@@ -307,7 +305,8 @@ async def score(interaction: discord.Interaction, player1: str, goals1: int, pla
 
 @tree.command(name="updatetier", description="Process promos and demos for a tier (admin only)")
 @is_admin()
-@app_commands.describe(tier="Tier name e.g. Gold 1")
+@app_commands.describe(tier="Select a tier")
+@app_commands.autocomplete(tier=tier_autocomplete)
 async def updatetier(interaction: discord.Interaction, tier: str):
     await interaction.response.defer()
 
@@ -387,8 +386,8 @@ async def bracket(interaction: discord.Interaction, tier: str):
 
     embed = discord.Embed(title=f"⚔️ Round Bracket — {tier}", color=0xff4444)
 
+    lines = []
     for p in players:
-        p = dict(p)
         if p["round_done"]:
             if p["round_wins"] >= 2:
                 status = "✅ PROMO (2W)"
@@ -396,19 +395,16 @@ async def bracket(interaction: discord.Interaction, tier: str):
                 status = "❌ DEMO (2L)"
         else:
             status = f"🎮 {p['round_wins']}W / {p['round_losses']}L"
+        lines.append(f"**{p['name']}** — {status}")
 
-        embed.add_field(
-            name=p["name"],
-            value=status,
-            inline=True
-        )
+    embed.description = "\n".join(lines)
 
     matchups = get_valid_matchups(tier)
     if matchups:
         next_matches = "\n".join([f"• **{m[0]}** vs **{m[1]}**" for m in matchups])
         embed.add_field(name="⚔️ Next Matchup(s)", value=next_matches, inline=False)
     else:
-        active = [dict(p) for p in players if not dict(p)["round_done"]]
+        active = [p for p in players if not p["round_done"]]
         if not active:
             embed.add_field(name="✅ Round Complete!", value="Use `/updatetier` to process promos and demos.", inline=False)
         else:
@@ -432,38 +428,37 @@ async def view_tier(interaction: discord.Interaction, tier: str):
         return
 
     embed = discord.Embed(title=f"🏅 {tier}", color=0x00aaff)
+    lines = []
     for p in players:
-        p = dict(p)
         total = p["wins"] + p["losses"]
         winrate = round((p["wins"] / total * 100)) if total > 0 else 0
-        embed.add_field(
-            name=f"Rank {p['rank_in_tier']} — {p['name']}",
-            value=f"W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%",
-            inline=False
-        )
+        lines.append(f"**Rank {p['rank_in_tier']} — {p['name']}**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+    embed.description = "\n\n".join(lines)
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="profile", description="View a player's profile")
-@app_commands.describe(name="Player name")
-async def profile(interaction: discord.Interaction, name: str):
-    player = get_player(name)
-    if not player:
-        await interaction.response.send_message(f"❌ **{name}** not found!")
+@app_commands.describe(player="Select a player")
+async def profile(interaction: discord.Interaction, player: discord.Member):
+    display_name = player.display_name
+    p = get_player(display_name)
+    if not p:
+        await interaction.response.send_message(f"❌ **{display_name}** not found!", ephemeral=True)
         return
 
-    p = dict(player)
     total = p["wins"] + p["losses"]
     winrate = round((p["wins"] / total * 100)) if total > 0 else 0
 
-    embed = discord.Embed(title=f"⚽ {name}", color=0xffaa00)
-    embed.add_field(name="Tier", value=f"**{p['tier']}** (Rank {p['rank_in_tier']})", inline=True)
-    embed.add_field(name="Wins", value=p["wins"], inline=True)
-    embed.add_field(name="Losses", value=p["losses"], inline=True)
-    embed.add_field(name="Goals Scored", value=p["goals"], inline=True)
-    embed.add_field(name="Goals Against", value=p["goals_against"], inline=True)
-    embed.add_field(name="Winrate", value=f"{winrate}%", inline=True)
-    embed.add_field(name="Matches Played", value=total, inline=True)
-    embed.add_field(name="This Round", value=f"{p['round_wins']}W / {p['round_losses']}L", inline=True)
+    embed = discord.Embed(title=f"⚽ {display_name}", color=0xffaa00)
+    embed.set_thumbnail(url=player.display_avatar.url)
+    embed.description = (
+        f"**Tier:** {p['tier']} (Rank {p['rank_in_tier']})\n"
+        f"**Wins:** {p['wins']}\n"
+        f"**Losses:** {p['losses']}\n"
+        f"**Goals Scored:** {p['goals']}\n"
+        f"**Goals Against:** {p['goals_against']}\n"
+        f"**Winrate:** {winrate}%\n"
+        f"**Matches Played:** {total}"
+    )
     await interaction.response.send_message(embed=embed)
 
 @tree.command(name="alltiers", description="Overview of all tiers and their players")
@@ -487,8 +482,8 @@ async def alltiers(interaction: discord.Interaction):
 
     for tier in TIERS:
         if tier in tier_data:
-            names = chr(10).join([f"R{p['rank_in_tier']} {p['name']}" for p in tier_data[tier]])
-            embed.add_field(name=f"**{tier}** ({len(tier_data[tier])}/4)", value=names, inline=False)
+            lines = "\n".join([f"{p['rank_in_tier']}. {p['name']}" for p in tier_data[tier]])
+            embed.add_field(name=f"**{tier}**", value=lines, inline=False)
 
     await interaction.response.send_message(embed=embed)
 
@@ -503,13 +498,12 @@ async def on_ready():
     print(f"📊 Database ready")
     print(f"🎮 Slash commands synced")
 
-# Keep Render Web Service alive
 from flask import Flask
 from threading import Thread
 
 app = Flask(__name__)
 
-@app.route("/") 
+@app.route("/")
 def home():
     return "Bot is running!"
 

@@ -49,7 +49,9 @@ def setup_db():
             rank_in_tier INTEGER DEFAULT 0,
             round_wins INTEGER DEFAULT 0,
             round_losses INTEGER DEFAULT 0,
-            round_done INTEGER DEFAULT 0
+            round_done INTEGER DEFAULT 0,
+            licensed TEXT DEFAULT 'No',
+            playstyle TEXT DEFAULT 'Balanced'
         )
     """)
     c.execute("""
@@ -62,7 +64,17 @@ def setup_db():
             date TEXT
         )
     """)
-    conn.commit()
+    # Add new columns if they don't exist yet (migration)
+    try:
+        c.execute("ALTER TABLE players ADD COLUMN licensed TEXT DEFAULT 'No'")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    try:
+        c.execute("ALTER TABLE players ADD COLUMN playstyle TEXT DEFAULT 'Balanced'")
+        conn.commit()
+    except Exception:
+        conn.rollback()
     conn.close()
 
 # ─────────────────────────────────────────
@@ -146,6 +158,15 @@ async def send_announcement(message: str):
 # SLASH COMMANDS
 # ─────────────────────────────────────────
 
+
+PLAYSTYLES = ["Super Defensive", "Defensive", "Controlling", "Balanced", "Offensive", "Very Offensive"]
+
+async def playstyle_autocomplete(interaction: discord.Interaction, current: str):
+    return [
+        app_commands.Choice(name=p, value=p)
+        for p in PLAYSTYLES if current.lower() in p.lower()
+    ]
+
 async def tier_autocomplete(interaction: discord.Interaction, current: str):
     return [
         app_commands.Choice(name=tier, value=tier)
@@ -160,11 +181,14 @@ async def tier_autocomplete(interaction: discord.Interaction, current: str):
     rank="Rank in tier 1-4 (optional)",
     wins="Starting wins (optional)",
     losses="Starting losses (optional)",
-    goals="Starting goals (optional)"
+    goals="Starting goals (optional)",
+    licensed="Is the player licensed? Yes or No",
+    playstyle="Player playstyle"
 )
-@app_commands.autocomplete(tier=tier_autocomplete)
+@app_commands.autocomplete(tier=tier_autocomplete, playstyle=playstyle_autocomplete)
 async def addplayer(interaction: discord.Interaction, player: discord.Member, tier: str,
-                    rank: int = None, wins: int = None, losses: int = None, goals: int = None):
+                    rank: int = None, wins: int = None, losses: int = None, goals: int = None,
+                    licensed: str = None, playstyle: str = None):
     tier = tier.title()
     if tier not in TIERS:
         await interaction.response.send_message("❌ Invalid tier!", ephemeral=True)
@@ -192,12 +216,14 @@ async def addplayer(interaction: discord.Interaction, player: discord.Member, ti
     w = wins if wins is not None else 0
     l = losses if losses is not None else 0
     g = goals if goals is not None else 0
+    lic = licensed if licensed is not None else "No"
+    ps = playstyle if playstyle is not None else "Balanced"
 
     conn = get_db()
     c = conn.cursor()
     c.execute(
-        "INSERT INTO players (name, tier, rank_in_tier, wins, losses, goals) VALUES (%s, %s, %s, %s, %s, %s)",
-        (name, tier, rank, w, l, g)
+        "INSERT INTO players (name, tier, rank_in_tier, wins, losses, goals, licensed, playstyle) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+        (name, tier, rank, w, l, g, lic, ps)
     )
     conn.commit()
     conn.close()
@@ -464,8 +490,13 @@ async def profile(interaction: discord.Interaction, player: discord.Member):
 
     embed = discord.Embed(title=f"⚽ {display_name}", color=0xffaa00)
     embed.set_thumbnail(url=player.display_avatar.url)
+    licensed = p.get("licensed", "No")
+    playstyle = p.get("playstyle", "Balanced")
     embed.description = (
-        f"**Tier:** {p['tier']} (Rank {p['rank_in_tier']})\n"
+        f"**Tier:** {p['tier']}\n"
+        f"**Current Rank:** {p['rank_in_tier']}\n"
+        f"**Licensed:** {licensed}\n"
+        f"**Playstyle:** {playstyle}\n"
         f"**Wins:** {p['wins']}\n"
         f"**Losses:** {p['losses']}\n"
         f"**Goals Scored:** {p['goals']}\n"
@@ -585,12 +616,14 @@ async def updateall(interaction: discord.Interaction):
     losses="New loss count",
     goals="New goals scored count",
     tier="New tier",
-    rank="New rank in tier (1-4)"
+    rank="New rank in tier (1-4)",
+    licensed="Is the player licensed? Yes or No",
+    playstyle="Player playstyle"
 )
-@app_commands.autocomplete(tier=tier_autocomplete)
+@app_commands.autocomplete(tier=tier_autocomplete, playstyle=playstyle_autocomplete)
 async def setstats(interaction: discord.Interaction, player: discord.Member,
                    wins: int = None, losses: int = None, goals: int = None,
-                   tier: str = None, rank: int = None):
+                   tier: str = None, rank: int = None, licensed: str = None, playstyle: str = None):
     uid = str(player.id)
     display = player.display_name
     p = get_player(uid)
@@ -626,6 +659,12 @@ async def setstats(interaction: discord.Interaction, player: discord.Member,
     if rank is not None:
         updates.append("rank_in_tier = %s")
         values.append(rank)
+    if licensed is not None:
+        updates.append("licensed = %s")
+        values.append(licensed)
+    if playstyle is not None:
+        updates.append("playstyle = %s")
+        values.append(playstyle)
 
     if not updates:
         await interaction.response.send_message("❌ You didn't change anything!", ephemeral=True)
@@ -646,6 +685,8 @@ async def setstats(interaction: discord.Interaction, player: discord.Member,
     if goals is not None: changed.append(f"Goals: {goals}")
     if tier is not None: changed.append(f"Tier: {tier}")
     if rank is not None: changed.append(f"Rank: {rank}")
+    if licensed is not None: changed.append(f"Licensed: {licensed}")
+    if playstyle is not None: changed.append(f"Playstyle: {playstyle}")
 
     await interaction.response.send_message(f"✅ Updated <@{uid}>: {' | '.join(changed)}")
 

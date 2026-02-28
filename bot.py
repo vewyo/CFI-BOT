@@ -434,7 +434,7 @@ async def view_tier(interaction: discord.Interaction, tier: str):
     for p in players:
         total = p["wins"] + p["losses"]
         winrate = round((p["wins"] / total * 100)) if total > 0 else 0
-        lines.append(f"**Rank {p['rank_in_tier']} — {p['name']}**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+        lines.append(f"**Rank {p['rank_in_tier']} — <@{p['name']}>**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
     embed.description = "\n\n".join(lines)
     await interaction.response.send_message(embed=embed)
 
@@ -458,7 +458,6 @@ async def profile(interaction: discord.Interaction, player: discord.Member):
         f"**Wins:** {p['wins']}\n"
         f"**Losses:** {p['losses']}\n"
         f"**Goals Scored:** {p['goals']}\n"
-        f"**Goals Against:** {p['goals_against']}\n"
         f"**Winrate:** {winrate}%\n"
         f"**Matches Played:** {total}"
     )

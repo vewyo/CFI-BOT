@@ -489,6 +489,78 @@ async def alltiers(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
+
+@tree.command(name="updateall", description="Process all promos and demos for every tier at once (admin only)")
+@is_admin()
+async def updateall(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM players")
+    all_players = [dict(p) for p in c.fetchall()]
+    conn.close()
+
+    if not all_players:
+        await interaction.followup.send("❌ No players found!")
+        return
+
+    # First collect all moves so we don't process cascading changes
+    moves = {}
+    for p in all_players:
+        name = p["name"]
+        rw = p["round_wins"]
+        rl = p["round_losses"]
+        current_idx = tier_index(p["tier"])
+
+        if rw >= 2 and current_idx > 0:
+            moves[name] = ("promo", TIERS[current_idx - 1])
+        elif rl >= 2 and current_idx < len(TIERS) - 1:
+            moves[name] = ("demo", TIERS[current_idx + 1])
+
+    # Apply all moves at once
+    conn = get_db()
+    c = conn.cursor()
+
+    results = {"promo": [], "demo": [], "none": []}
+
+    for p in all_players:
+        name = p["name"]
+        if name in moves:
+            move_type, new_tier = moves[name]
+            c.execute(
+                "UPDATE players SET tier = %s, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s",
+                (new_tier, name)
+            )
+            if move_type == "promo":
+                results["promo"].append(f"🎉 <@{name}> → **{new_tier}**")
+            else:
+                results["demo"].append(f"📉 <@{name}> → **{new_tier}**")
+        else:
+            c.execute(
+                "UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s",
+                (name,)
+            )
+            results["none"].append(f"➡️ <@{name}>")
+
+    conn.commit()
+    conn.close()
+
+    for t in TIERS:
+        update_ranks_in_tier(t)
+
+    embed = discord.Embed(title="🔄 Full Ranking Update", color=0xff9900)
+
+    if results["promo"]:
+        embed.add_field(name="🎉 Promotions", value="\n".join(results["promo"]), inline=False)
+    if results["demo"]:
+        embed.add_field(name="📉 Demotions", value="\n".join(results["demo"]), inline=False)
+    if results["none"]:
+        embed.add_field(name="➡️ No change", value="\n".join(results["none"]), inline=False)
+
+    embed.set_footer(text="All round stats reset. New round can begin!")
+    await interaction.followup.send(embed=embed)
+
 # ─────────────────────────────────────────
 # BOT EVENTS
 # ─────────────────────────────────────────

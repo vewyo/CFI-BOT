@@ -486,4 +486,18 @@ async def on_ready():
     print(f"📊 Database ready")
     print(f"🎮 Slash commands synced")
 
+# Keep Render Web Service alive
+from flask import Flask
+from threading import Thread
+
+app = Flask(__name__)
+
+@app.route("/") 
+def home():
+    return "Bot is running!"
+
+def run_web():
+    app.run(host="0.0.0.0", port=8080)
+
+Thread(target=run_web).start()
 bot.run(BOT_TOKEN)

@@ -753,7 +753,6 @@ async def on_ready():
         print(f"⏳ on_ready started for {bot.user}")
         setup_db()
         print("📊 Database ready")
-        tree.clear_commands(guild=None)
         synced = await tree.sync()
         print(f"✅ Bot is online as {bot.user}!")
         print(f"🎮 Slash commands synced: {len(synced)} commands")

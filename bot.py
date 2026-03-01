@@ -65,14 +65,15 @@ def setup_db():
             date TEXT
         )
     """)
-    # Clean up old <@id> format names
+    # Clean up all name formats to raw numeric ID
     try:
-        c.execute("SELECT name FROM players WHERE name LIKE '<%'")
-        old_names = c.fetchall()
-        for row in old_names:
-            old = row["name"]
-            new = old.strip("<@>")
-            c.execute("UPDATE players SET name = %s WHERE name = %s", (new, old))
+        c.execute("SELECT name FROM players")
+        all_names = c.fetchall()
+        for row in all_names:
+            raw = row["name"]
+            clean = raw.strip("<@>").strip()
+            if clean != raw:
+                c.execute("UPDATE players SET name = %s WHERE name = %s", (clean, raw))
         conn.commit()
     except Exception as e:
         print(f"Migration cleanup error: {e}")
@@ -164,17 +165,22 @@ def get_valid_matchups(tier: str):
 
 
 async def get_display_name(guild: discord.Guild, uid: str) -> str:
-    uid = uid.strip("<@>")
+    # Strip any <@> formatting to get the raw ID
+    clean = uid.strip("<@>").strip()
     try:
-        member = guild.get_member(int(uid))
+        member = guild.get_member(int(clean))
         if member:
             return member.display_name
-        member = await guild.fetch_member(int(uid))
+        member = await guild.fetch_member(int(clean))
         if member:
             return member.display_name
     except Exception:
         pass
-    return f"<@{uid}>"
+    return f"<@{clean}>"
+
+def get_uid(raw: str) -> str:
+    """Always return a clean numeric ID from whatever is stored."""
+    return raw.strip("<@>").strip()
 
 async def send_announcement(message: str):
     if ANNOUNCEMENT_CHANNEL_ID and ANNOUNCEMENT_CHANNEL_ID != 0:
@@ -365,7 +371,7 @@ async def score(interaction: discord.Interaction, player1: discord.Member, goals
     tier_players = get_tier_players(p1["tier"])
     for p in tier_players:
         status = "✅ Done" if p["round_done"] else "🎮 Active"
-        msg += f"• <@{p['name']}>: {p['round_wins']}W / {p['round_losses']}L — {status}\n"
+        msg += f"• <@{get_uid(p['name'])}>: {p['round_wins']}W / {p['round_losses']}L — {status}\n"
 
     msg += promo_msg
     msg += demo_msg
@@ -565,7 +571,7 @@ async def alltiers(interaction: discord.Interaction):
                 total = p["wins"] + p["losses"]
                 winrate = round((p["wins"] / total * 100)) if total > 0 else 0
                 dname = await get_display_name(interaction.guild, p["name"])
-                uid = p["name"].strip("<@>")
+                uid = get_uid(p["name"])
                 lines.append(f"**{global_rank}. <@{uid}>** W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
                 global_rank += 1
             embed.add_field(name="​", value="", inline=False)

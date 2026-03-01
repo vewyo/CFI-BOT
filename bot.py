@@ -607,7 +607,7 @@ async def bracket(interaction: discord.Interaction, tier: str):
         else:
             status = f"🎮 {p['round_wins']}W / {p['round_losses']}L"
         member = interaction.guild.get_member(int(get_uid(p["name"])))
-        name_str = f"@{member.display_name}" if member else f"@{get_uid(p['name'])}"
+        name_str = member.display_name if member else get_uid(p["name"])
         lines.append(f"{name_str} — {status}")
 
     embed.description = "\n".join(lines)
@@ -616,7 +616,7 @@ async def bracket(interaction: discord.Interaction, tier: str):
     if matchups:
         def get_name(uid):
             m = interaction.guild.get_member(int(get_uid(uid)))
-            return f"@{m.display_name}" if m else f"@{get_uid(uid)}"
+            return m.display_name if m else get_uid(uid)
         next_matches = "\n".join([f"• {get_name(m[0])} vs {get_name(m[1])}" for m in matchups])
         embed.add_field(name="⚔️ Next Matchup(s)", value=next_matches, inline=False)
     else:
@@ -646,8 +646,9 @@ async def view_tier(interaction: discord.Interaction, tier: str):
     embed = discord.Embed(title=f"🏅 {tier}", color=0x00aaff)
     lines_list = []
     for p in players:
-        uid = get_uid(p["name"])
-        lines_list.append(f"{p['rank_in_tier']}. <@{uid}>")
+        member = interaction.guild.get_member(int(get_uid(p["name"])))
+        name_str = member.display_name if member else get_uid(p["name"])
+        lines_list.append(f"{p['rank_in_tier']}. {name_str}")
     lines = chr(10).join(lines_list)
     embed.description = lines
     await interaction.response.send_message(embed=embed)

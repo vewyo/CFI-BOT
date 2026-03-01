@@ -79,6 +79,13 @@ def setup_db():
         print(f"Migration cleanup error: {e}")
         conn.rollback()
 
+    # Add pending column if it doesn't exist yet
+    try:
+        c.execute("ALTER TABLE players ADD COLUMN pending INTEGER DEFAULT 0")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+
     # Add new columns if they don't exist yet (migration)
     try:
         c.execute("ALTER TABLE players ADD COLUMN licensed TEXT DEFAULT 'No'")
@@ -121,7 +128,7 @@ def tier_index(tier: str):
 def get_tier_players(tier: str):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT * FROM players WHERE tier = %s ORDER BY rank_in_tier ASC", (tier,))
+    c.execute("SELECT * FROM players WHERE tier = %s AND (pending IS NULL OR pending = 0) ORDER BY rank_in_tier ASC", (tier,))
     players = c.fetchall()
     conn.close()
     return [dict(p) for p in players]
@@ -145,18 +152,40 @@ def update_ranks_in_tier(tier: str):
 def get_valid_matchups(tier: str):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT * FROM players WHERE tier = %s AND round_done = 0", (tier,))
+    # Exclude pending and done players
+    c.execute("SELECT * FROM players WHERE tier = %s AND round_done = 0 AND (pending IS NULL OR pending = 0) ORDER BY rank_in_tier ASC", (tier,))
     players = [dict(p) for p in c.fetchall()]
     conn.close()
 
+    if len(players) < 2:
+        return []
+
+    # Always pair rank 1 vs rank 3 and rank 2 vs rank 4 if they have the same record
+    matchups = []
+    paired = set()
+
+    # Try fixed pairings first: rank 1 vs 3 and rank 2 vs 4
+    rank_map = {p["rank_in_tier"]: p for p in players}
+    fixed_pairs = [(1, 3), (2, 4)]
+    for r1, r2 in fixed_pairs:
+        if r1 in rank_map and r2 in rank_map:
+            p1 = rank_map[r1]
+            p2 = rank_map[r2]
+            key1 = (p1["round_wins"], p1["round_losses"])
+            key2 = (p2["round_wins"], p2["round_losses"])
+            if key1 == key2 and p1["name"] not in paired and p2["name"] not in paired:
+                matchups.append((p1["name"], p2["name"], key1))
+                paired.add(p1["name"])
+                paired.add(p2["name"])
+
+    # Fallback: group by record for any remaining unpaired players
+    remaining = [p for p in players if p["name"] not in paired]
     groups = {}
-    for p in players:
+    for p in remaining:
         key = (p["round_wins"], p["round_losses"])
         if key not in groups:
             groups[key] = []
         groups[key].append(p["name"])
-
-    matchups = []
     for key, names in groups.items():
         if len(names) >= 2:
             matchups.append((names[0], names[1], key))
@@ -483,6 +512,9 @@ async def updatetier(interaction: discord.Interaction, tier: str):
     conn = get_db()
     c = conn.cursor()
 
+    promo_list = []
+    demo_list = []
+
     for p in players:
         name = p["name"]
         rw = p["round_wins"]
@@ -492,36 +524,49 @@ async def updatetier(interaction: discord.Interaction, tier: str):
             current_idx = tier_index(p["tier"])
             if current_idx > 0:
                 new_tier = TIERS[current_idx - 1]
+                # Move to new tier as pending — don't reset round stats yet
                 c.execute(
-                    "UPDATE players SET tier = %s, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s",
+                    "UPDATE players SET tier = %s, pending = 1 WHERE name = %s",
                     (new_tier, name)
                 )
-                results.append(f"🎉 **PROMOTION!** {name} → **{new_tier}**")
+                promo_list.append((name, new_tier))
+                results.append(f"🎉 <@{get_uid(name)}> → **{new_tier}** (pending)")
             else:
-                c.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s", (name,))
-                results.append(f"🏅 {name} is already in the highest tier! Round reset.")
+                results.append(f"🏅 <@{get_uid(name)}> is already in the highest tier!")
         elif rl >= 2:
             current_idx = tier_index(p["tier"])
             if current_idx < len(TIERS) - 1:
                 new_tier = TIERS[current_idx + 1]
+                # Move to new tier as pending — don't reset round stats yet
                 c.execute(
-                    "UPDATE players SET tier = %s, round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s",
+                    "UPDATE players SET tier = %s, pending = 1 WHERE name = %s",
                     (new_tier, name)
                 )
-                results.append(f"📉 **DEMOTION!** {name} → **{new_tier}**")
+                demo_list.append((name, new_tier))
+                results.append(f"📉 <@{get_uid(name)}> → **{new_tier}** (pending)")
             else:
-                c.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s", (name,))
-                results.append(f"⚠️ {name} is already in the lowest tier! Round reset.")
+                results.append(f"⚠️ <@{get_uid(name)}> is already in the lowest tier!")
         else:
-            c.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s", (name,))
-            results.append(f"➡️ {name}: {rw}W / {rl}L — no change. Round reset.")
+            results.append(f"➡️ <@{get_uid(name)}>: {rw}W / {rl}L — no change")
+
+    # Fix ranks in affected tiers
+    affected_tiers = set([tier] + [t for _, t in promo_list] + [t for _, t in demo_list])
+    for t in affected_tiers:
+        c.execute("SELECT * FROM players WHERE tier = %s ORDER BY rank_in_tier ASC", (t,))
+        tier_players = [dict(p) for p in c.fetchall()]
+        promoted_into = [name for name, nt in promo_list if nt == t]
+        demoted_into = [name for name, nt in demo_list if nt == t]
+        stayers = [p["name"] for p in tier_players if p["name"] not in promoted_into and p["name"] not in demoted_into]
+        ordered = demoted_into + stayers + promoted_into
+        for i, name in enumerate(ordered):
+            c.execute("UPDATE players SET rank_in_tier = %s WHERE name = %s", (i + 1, name))
 
     conn.commit()
     conn.close()
 
     embed = discord.Embed(title=f"🔄 Tier Update — {tier}", color=0xff9900)
     embed.description = "\n".join(results)
-    embed.set_footer(text="Round stats reset. New round can begin!")
+    embed.set_footer(text="Moved players are pending. Use /updateall to start the new round.")
 
     await interaction.followup.send(embed=embed)
     await send_announcement(embed.description)
@@ -714,22 +759,8 @@ async def updateall(interaction: discord.Interaction):
 
     conn.commit()
 
-    # Fix ranks per tier:
-    # demoted players get ranks 1 and 2
-    # stayers keep their relative order after that
-    # promoted players get the last ranks (3 and 4)
-    for tier in TIERS:
-        c.execute("SELECT * FROM players WHERE tier = %s ORDER BY rank_in_tier ASC", (tier,))
-        tier_players = [dict(p) for p in c.fetchall()]
-
-        promoted_into = [name for name, t in promo_list if t == tier]
-        demoted_into = [name for name, t in demo_list if t == tier]
-        stayers = [p["name"] for p in tier_players if p["name"] not in promoted_into and p["name"] not in demoted_into]
-
-        ordered = demoted_into + stayers + promoted_into
-        for i, name in enumerate(ordered):
-            c.execute("UPDATE players SET rank_in_tier = %s WHERE name = %s", (i + 1, name))
-
+    # Reset all round stats and clear pending for everyone
+    c.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0, pending = 0")
     conn.commit()
     conn.close()
 

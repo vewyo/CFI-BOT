@@ -25,6 +25,7 @@ TIERS = [
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
@@ -160,6 +161,20 @@ def get_valid_matchups(tier: str):
             matchups.append((names[0], names[1], key))
 
     return matchups
+
+
+async def get_display_name(guild: discord.Guild, uid: str) -> str:
+    uid = uid.strip("<@>")
+    try:
+        member = guild.get_member(int(uid))
+        if member:
+            return member.display_name
+        member = await guild.fetch_member(int(uid))
+        if member:
+            return member.display_name
+    except Exception:
+        pass
+    return f"<@{uid}>"
 
 async def send_announcement(message: str):
     if ANNOUNCEMENT_CHANNEL_ID and ANNOUNCEMENT_CHANNEL_ID != 0:
@@ -485,7 +500,11 @@ async def view_tier(interaction: discord.Interaction, tier: str):
         return
 
     embed = discord.Embed(title=f"🏅 {tier}", color=0x00aaff)
-    lines = chr(10).join([f"{p['rank_in_tier']}. <@{p['name'].strip('<@>')}>" for p in players])
+    lines_list = []
+    for p in players:
+        dname = await get_display_name(interaction.guild, p["name"])
+        lines_list.append(f"{p['rank_in_tier']}. {dname}")
+    lines = chr(10).join(lines_list)
     embed.description = lines
     await interaction.response.send_message(embed=embed)
 
@@ -544,8 +563,8 @@ async def alltiers(interaction: discord.Interaction):
             for p in tier_data[tier]:
                 total = p["wins"] + p["losses"]
                 winrate = round((p["wins"] / total * 100)) if total > 0 else 0
-                raw = p["name"].strip("<@>")
-                lines.append(f"**Rank {p['rank_in_tier']} — <@{raw}>**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+                dname = await get_display_name(interaction.guild, p["name"])
+                lines.append(f"**Rank {p['rank_in_tier']} — {dname}**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
             embed.add_field(name=f"**{tier}**", value="\n\n".join(lines), inline=False)
 
     await interaction.response.send_message(embed=embed)

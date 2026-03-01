@@ -550,13 +550,14 @@ async def alltiers(interaction: discord.Interaction):
         await interaction.response.send_message("There are no players yet!")
         return
 
-    embed = discord.Embed(title="🌍 All Tiers Overview", color=0x00ff88)
+    embed = discord.Embed(title="🌍 CFI Ranking", color=0x00ff88)
     tier_data = {}
     for p in all_players:
         if p["tier"] not in tier_data:
             tier_data[p["tier"]] = []
         tier_data[p["tier"]].append(p)
 
+    global_rank = 1
     for tier in TIERS:
         if tier in tier_data:
             lines = []
@@ -564,8 +565,9 @@ async def alltiers(interaction: discord.Interaction):
                 total = p["wins"] + p["losses"]
                 winrate = round((p["wins"] / total * 100)) if total > 0 else 0
                 dname = await get_display_name(interaction.guild, p["name"])
-                lines.append(f"**Rank {p['rank_in_tier']} — {dname}**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
-            embed.add_field(name=f"**{tier}**", value="\n\n".join(lines), inline=False)
+                lines.append(f"**{global_rank}. {dname}**\nW: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+                global_rank += 1
+            embed.add_field(name=f"\n**{tier}**", value="\n\n".join(lines), inline=False)
 
     await interaction.response.send_message(embed=embed)
 

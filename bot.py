@@ -571,7 +571,9 @@ async def alltiers(interaction: discord.Interaction):
                 total = p["wins"] + p["losses"]
                 winrate = round((p["wins"] / total * 100)) if total > 0 else 0
                 uid = get_uid(p["name"])
-                lines.append(f"**{global_rank}.** <@{uid}> W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+                member = interaction.guild.get_member(int(uid))
+                name_str = member.display_name if member else f"<@{uid}>"
+                lines.append(f"**{global_rank}. {name_str}**" + chr(10) + f"W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
                 global_rank += 1
             embed.add_field(name="​", value="", inline=False)
             embed.add_field(name=f"**{tier}**", value=chr(10).join(lines), inline=False)
@@ -863,6 +865,10 @@ async def on_ready():
         print(f"⏳ on_ready started for {bot.user}")
         setup_db()
         print("📊 Database ready")
+        # Pre-load member cache for all guilds
+        for guild in bot.guilds:
+            await guild.chunk()
+        print("👥 Member cache loaded")
         synced = await tree.sync()
         print(f"✅ Bot is online as {bot.user}!")
         print(f"🎮 Slash commands synced: {len(synced)} commands")

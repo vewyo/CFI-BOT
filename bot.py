@@ -343,8 +343,6 @@ async def score(interaction: discord.Interaction, player1: discord.Member, goals
     conn.commit()
     conn.close()
 
-    update_ranks_in_tier(p1["tier"])
-
     msg = f"⚽ **Match Result**\n"
     msg += f"🏆 **{winner_name}** {winner_goals} - {loser_goals} **{loser_name}**\n"
     msg += f"\n📊 **Round Standings — {p1['tier']}:**\n"
@@ -421,9 +419,6 @@ async def updatetier(interaction: discord.Interaction, tier: str):
 
     conn.commit()
     conn.close()
-
-    for t in TIERS:
-        update_ranks_in_tier(t)
 
     embed = discord.Embed(title=f"🔄 Tier Update — {tier}", color=0xff9900)
     embed.description = "\n".join(results)
@@ -588,7 +583,9 @@ async def updateall(interaction: discord.Interaction):
     conn = get_db()
     c = conn.cursor()
 
-    results = {"promo": [], "demo": [], "none": []}
+    promo_list = []
+    demo_list = []
+    none_list = []
 
     for p in all_players:
         name = p["name"]
@@ -599,30 +596,45 @@ async def updateall(interaction: discord.Interaction):
                 (new_tier, name)
             )
             if move_type == "promo":
-                results["promo"].append(f"🎉 <@{name}> → **{new_tier}**")
+                promo_list.append((name, new_tier))
             else:
-                results["demo"].append(f"📉 <@{name}> → **{new_tier}**")
+                demo_list.append((name, new_tier))
         else:
             c.execute(
                 "UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0 WHERE name = %s",
                 (name,)
             )
-            results["none"].append(f"➡️ <@{name}>")
+            none_list.append(f"➡️ <@{name}>")
+
+    conn.commit()
+
+    # Fix ranks per tier:
+    # demoted players get ranks 1 and 2
+    # stayers keep their relative order after that
+    # promoted players get the last ranks (3 and 4)
+    for tier in TIERS:
+        c.execute("SELECT * FROM players WHERE tier = %s ORDER BY rank_in_tier ASC", (tier,))
+        tier_players = [dict(p) for p in c.fetchall()]
+
+        promoted_into = [name for name, t in promo_list if t == tier]
+        demoted_into = [name for name, t in demo_list if t == tier]
+        stayers = [p["name"] for p in tier_players if p["name"] not in promoted_into and p["name"] not in demoted_into]
+
+        ordered = demoted_into + stayers + promoted_into
+        for i, name in enumerate(ordered):
+            c.execute("UPDATE players SET rank_in_tier = %s WHERE name = %s", (i + 1, name))
 
     conn.commit()
     conn.close()
 
-    for t in TIERS:
-        update_ranks_in_tier(t)
-
     embed = discord.Embed(title="🔄 Full Ranking Update", color=0xff9900)
 
-    if results["promo"]:
-        embed.add_field(name="🎉 Promotions", value="\n".join(results["promo"]), inline=False)
-    if results["demo"]:
-        embed.add_field(name="📉 Demotions", value="\n".join(results["demo"]), inline=False)
-    if results["none"]:
-        embed.add_field(name="➡️ No change", value="\n".join(results["none"]), inline=False)
+    if promo_list:
+        embed.add_field(name="🎉 Promotions", value="\n".join([f"🎉 <@{n}> → **{t}**" for n, t in promo_list]), inline=False)
+    if demo_list:
+        embed.add_field(name="📉 Demotions", value="\n".join([f"📉 <@{n}> → **{t}**" for n, t in demo_list]), inline=False)
+    if none_list:
+        embed.add_field(name="➡️ No change", value="\n".join(none_list), inline=False)
 
     embed.set_footer(text="All round stats reset. New round can begin!")
     await interaction.followup.send(embed=embed)
@@ -696,8 +708,6 @@ async def setstats(interaction: discord.Interaction, player: discord.Member,
     c.execute(f"UPDATE players SET {', '.join(updates)} WHERE name = %s", values)
     conn.commit()
     conn.close()
-
-    update_ranks_in_tier(tier if tier else p["tier"])
 
     changed = []
     if wins is not None: changed.append(f"Wins: {wins}")

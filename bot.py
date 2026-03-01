@@ -562,7 +562,8 @@ async def updatetier(interaction: discord.Interaction, tier: str):
                 demo_list.append((name, new_tier))
                 results.append(f"📉 <@{get_uid(name)}> → **{new_tier}** (pending)")
             else:
-                results.append(f"⚠️ <@{get_uid(name)}> is already in the lowest tier!")
+                c.execute("DELETE FROM players WHERE name = %s", (name,))
+                results.append(f"🚫 <@{get_uid(name)}> has been removed from the system (bottom of Bronze)")
         else:
             results.append(f"➡️ <@{get_uid(name)}>: {rw}W / {rl}L — no change")
 
@@ -828,6 +829,13 @@ async def overview(interaction: discord.Interaction):
         await interaction.followup.send("No overview available yet. Run /updateall first!")
         return
 
+    # Get player stats from players table
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM players")
+    all_players = {p["name"]: dict(p) for p in c.fetchall()}
+    conn.close()
+
     tier_data = {}
     for r in rows:
         t = r["tier"]
@@ -841,7 +849,14 @@ async def overview(interaction: discord.Interaction):
         if tier in tier_data:
             message += chr(10) + f"**{tier}**" + chr(10)
             for uid in tier_data[tier]:
-                message += f"{global_rank}. <@{uid}>" + chr(10)
+                p = all_players.get(uid)
+                if p:
+                    total = p["wins"] + p["losses"]
+                    winrate = round((p["wins"] / total * 100)) if total > 0 else 0
+                    message += f"{global_rank}. <@{uid}>" + chr(10)
+                    message += f"W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%" + chr(10)
+                else:
+                    message += f"{global_rank}. <@{uid}>" + chr(10)
                 global_rank += 1
 
     await interaction.followup.send(message, allowed_mentions=discord.AllowedMentions(users=True))

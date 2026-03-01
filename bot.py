@@ -160,17 +160,18 @@ def get_valid_matchups(tier: str):
     if len(players) < 2:
         return []
 
-    # Always pair rank 1 vs rank 3 and rank 2 vs rank 4 if they have the same record
+    # Sort by rank_in_tier so position 0=rank1, 1=rank2, 2=rank3, 3=rank4
+    players = sorted(players, key=lambda p: p["rank_in_tier"])
+
     matchups = []
     paired = set()
 
-    # Try fixed pairings first: rank 1 vs 3 and rank 2 vs 4
-    rank_map = {p["rank_in_tier"]: p for p in players}
-    fixed_pairs = [(1, 3), (2, 4)]
-    for r1, r2 in fixed_pairs:
-        if r1 in rank_map and r2 in rank_map:
-            p1 = rank_map[r1]
-            p2 = rank_map[r2]
+    # Fixed pairings by position: position 0 vs 2 (rank1 vs rank3) and position 1 vs 3 (rank2 vs rank4)
+    fixed_pairs = [(0, 2), (1, 3)]
+    for i, j in fixed_pairs:
+        if i < len(players) and j < len(players):
+            p1 = players[i]
+            p2 = players[j]
             key1 = (p1["round_wins"], p1["round_losses"])
             key2 = (p2["round_wins"], p2["round_losses"])
             if key1 == key2 and p1["name"] not in paired and p2["name"] not in paired:
@@ -178,7 +179,13 @@ def get_valid_matchups(tier: str):
                 paired.add(p1["name"])
                 paired.add(p2["name"])
 
-    # Fallback: group by record for any remaining unpaired players
+    if matchups:
+        return matchups
+
+    # Round 2 logic based on records
+    # Winners final: both rank1 and rank3 won (1W/0L) → rank1 vs rank2... 
+    # Actually: after round 1, winners play each other and losers play each other
+    # Group remaining active players by record
     remaining = [p for p in players if p["name"] not in paired]
     groups = {}
     for p in remaining:
@@ -186,9 +193,12 @@ def get_valid_matchups(tier: str):
         if key not in groups:
             groups[key] = []
         groups[key].append(p["name"])
+
     for key, names in groups.items():
         if len(names) >= 2:
-            matchups.append((names[0], names[1], key))
+            # Sort by rank so highest ranked plays first
+            names_sorted = sorted(names, key=lambda n: next(p["rank_in_tier"] for p in players if p["name"] == n))
+            matchups.append((names_sorted[0], names_sorted[1], key))
 
     return matchups
 

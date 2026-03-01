@@ -813,6 +813,39 @@ async def updateall(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed)
 
 
+
+@tree.command(name="overview", description="CFI Ranking as it was after the last /updateall")
+async def overview(interaction: discord.Interaction):
+    await interaction.response.defer()
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM overview_ranking ORDER BY position ASC")
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+
+    if not rows:
+        await interaction.followup.send("No overview available yet. Run /updateall first!")
+        return
+
+    tier_data = {}
+    for r in rows:
+        t = r["tier"]
+        if t not in tier_data:
+            tier_data[t] = []
+        tier_data[t].append(r["player_id"])
+
+    global_rank = 1
+    message = "🌍 **CFI Ranking**" + chr(10)
+    for tier in TIERS:
+        if tier in tier_data:
+            message += chr(10) + f"**{tier}**" + chr(10)
+            for uid in tier_data[tier]:
+                message += f"{global_rank}. <@{uid}>" + chr(10)
+                global_rank += 1
+
+    await interaction.followup.send(message, allowed_mentions=discord.AllowedMentions(users=True))
+
 @tree.command(name="setstats", description="Manually update a player's stats (admin only)")
 @is_admin()
 @app_commands.describe(

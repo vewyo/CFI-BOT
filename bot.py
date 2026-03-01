@@ -551,13 +551,14 @@ async def bracket(interaction: discord.Interaction, tier: str):
                 status = "❌ DEMO (2L)"
         else:
             status = f"🎮 {p['round_wins']}W / {p['round_losses']}L"
-        lines.append(f"**{p['name']}** — {status}")
+        uid = get_uid(p["name"])
+        lines.append(f"<@{uid}> — {status}")
 
     embed.description = "\n".join(lines)
 
     matchups = get_valid_matchups(tier)
     if matchups:
-        next_matches = "\n".join([f"• **{m[0]}** vs **{m[1]}**" for m in matchups])
+        next_matches = "\n".join([f"• <@{get_uid(m[0])}> vs <@{get_uid(m[1])}>" for m in matchups])
         embed.add_field(name="⚔️ Next Matchup(s)", value=next_matches, inline=False)
     else:
         active = [p for p in players if not p["round_done"]]

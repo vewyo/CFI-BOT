@@ -303,10 +303,10 @@ async def score(interaction: discord.Interaction, player1: discord.Member, goals
     p2 = get_player(name2)
 
     if not p1:
-        await interaction.followup.send(f"❌ **{name1}** not found!")
+        await interaction.followup.send(f"❌ {player1.display_name} not found!")
         return
     if not p2:
-        await interaction.followup.send(f"❌ **{name2}** not found!")
+        await interaction.followup.send(f"❌ {player2.display_name} not found!")
         return
     if goals1 == goals2:
         await interaction.followup.send("❌ Draws are not allowed!")
@@ -314,7 +314,7 @@ async def score(interaction: discord.Interaction, player1: discord.Member, goals
 
     if (p1["round_wins"], p1["round_losses"]) != (p2["round_wins"], p2["round_losses"]):
         await interaction.followup.send(
-            f"❌ **{name1}** ({p1['round_wins']}W/{p1['round_losses']}L) and **{name2}** ({p2['round_wins']}W/{p2['round_losses']}L) don't have the same round record and can't face each other yet!"
+            f"❌ {player1.display_name} ({p1['round_wins']}W/{p1['round_losses']}L) and {player2.display_name} ({p2['round_wins']}W/{p2['round_losses']}L) don't have the same round record and can't face each other yet!"
         )
         return
 
@@ -355,17 +355,17 @@ async def score(interaction: discord.Interaction, player1: discord.Member, goals
 
     if winner["round_wins"] >= 2:
         c.execute("UPDATE players SET round_done = 1 WHERE name = %s", (winner_name,))
-        promo_msg = f"\n🎉 **{winner_name}** has 2 wins — **PROMOTION** incoming! Use `/updatetier {winner['tier']}` to process."
+        promo_msg = f"\n🎉 <@{get_uid(winner_name)}> has 2 wins — **PROMOTION** incoming! Use `/updatetier {winner['tier']}` to process."
 
     if loser["round_losses"] >= 2:
         c.execute("UPDATE players SET round_done = 1 WHERE name = %s", (loser_name,))
-        demo_msg = f"\n📉 **{loser_name}** has 2 losses — **DEMOTION** incoming! Use `/updatetier {loser['tier']}` to process."
+        demo_msg = f"\n📉 <@{get_uid(loser_name)}> has 2 losses — **DEMOTION** incoming! Use `/updatetier {loser['tier']}` to process."
 
     conn.commit()
     conn.close()
 
     msg = f"⚽ **Match Result**\n"
-    msg += f"🏆 **{winner_name}** {winner_goals} - {loser_goals} **{loser_name}**\n"
+    msg += f"🏆 <@{get_uid(winner_name)}> {winner_goals} - {loser_goals} <@{get_uid(loser_name)}>\n"
     msg += f"\n📊 **Round Standings — {p1['tier']}:**\n"
 
     tier_players = get_tier_players(p1["tier"])
@@ -380,9 +380,87 @@ async def score(interaction: discord.Interaction, player1: discord.Member, goals
     if matchups:
         msg += f"\n⚔️ **Next valid matchup(s):**\n"
         for m in matchups:
-            msg += f"• **{m[0]}** vs **{m[1]}** ({m[2][0]}W/{m[2][1]}L each)\n"
+            msg += f"• <@{get_uid(m[0])}> vs <@{get_uid(m[1])}> ({m[2][0]}W/{m[2][1]}L each)\n"
 
-    await interaction.followup.send(msg)
+    await interaction.followup.send(msg, allowed_mentions=discord.AllowedMentions(users=True))
+
+
+@tree.command(name="unscore", description="Undo the last match between two players (admin only)")
+@is_admin()
+@app_commands.describe(
+    player1="First player",
+    player2="Second player"
+)
+async def unscore(interaction: discord.Interaction, player1: discord.Member, player2: discord.Member):
+    await interaction.response.defer()
+
+    name1 = str(player1.id)
+    name2 = str(player2.id)
+
+    conn = get_db()
+    c = conn.cursor()
+
+    # Find the last match between these two players
+    c.execute("""
+        SELECT * FROM matches
+        WHERE (player1 = %s AND player2 = %s) OR (player1 = %s AND player2 = %s)
+        ORDER BY id DESC LIMIT 1
+    """, (name1, name2, name2, name1))
+    match = c.fetchone()
+
+    if not match:
+        await interaction.followup.send(f"❌ No match found between {player1.display_name} and {player2.display_name}!")
+        conn.close()
+        return
+
+    match = dict(match)
+    # Figure out winner from scores
+    if match["score1"] > match["score2"]:
+        winner = match["player1"]
+        loser = match["player2"]
+        goals_winner = match["score1"]
+        goals_loser = match["score2"]
+    else:
+        winner = match["player2"]
+        loser = match["player1"]
+        goals_winner = match["score2"]
+        goals_loser = match["score1"]
+
+    # Reverse stats for winner
+    c.execute("""
+        UPDATE players SET
+            wins = GREATEST(wins - 1, 0),
+            goals = GREATEST(goals - %s, 0),
+            goals_against = GREATEST(goals_against - %s, 0),
+            round_wins = GREATEST(round_wins - 1, 0),
+            round_done = 0
+        WHERE name = %s
+    """, (goals_winner, goals_loser, winner))
+
+    # Reverse stats for loser
+    c.execute("""
+        UPDATE players SET
+            losses = GREATEST(losses - 1, 0),
+            goals = GREATEST(goals - %s, 0),
+            goals_against = GREATEST(goals_against - %s, 0),
+            round_losses = GREATEST(round_losses - 1, 0),
+            round_done = 0
+        WHERE name = %s
+    """, (goals_loser, goals_winner, loser))
+
+    # Delete the match record
+    c.execute("DELETE FROM matches WHERE id = %s", (match["id"],))
+
+    conn.commit()
+    conn.close()
+
+    winner_display = player1.display_name if winner == name1 else player2.display_name
+    loser_display = player2.display_name if winner == name1 else player1.display_name
+
+    await interaction.followup.send(
+        f"↩️ Match undone between {player1.display_name} and {player2.display_name}!\n"
+        f"Stats reversed for both players."
+    )
 
 @tree.command(name="updatetier", description="Process promos and demos for a tier (admin only)")
 @is_admin()

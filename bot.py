@@ -571,7 +571,7 @@ async def alltiers(interaction: discord.Interaction):
                 total = p["wins"] + p["losses"]
                 winrate = round((p["wins"] / total * 100)) if total > 0 else 0
                 uid = get_uid(p["name"])
-                lines.append(f"{global_rank}. <@{uid}> — W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+                lines.append(f"{global_rank}. <@{uid}>" + chr(10) + f"W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
                 global_rank += 1
             embed.add_field(name="​", value=f"**{tier}**" + chr(10) + chr(10).join(lines), inline=False)
 

@@ -508,8 +508,8 @@ async def view_tier(interaction: discord.Interaction, tier: str):
     embed = discord.Embed(title=f"🏅 {tier}", color=0x00aaff)
     lines_list = []
     for p in players:
-        dname = await get_display_name(interaction.guild, p["name"])
-        lines_list.append(f"{p['rank_in_tier']}. {dname}")
+        uid = get_uid(p["name"])
+        lines_list.append(f"{p['rank_in_tier']}. <@{uid}>")
     lines = chr(10).join(lines_list)
     embed.description = lines
     await interaction.response.send_message(embed=embed)
@@ -570,9 +570,8 @@ async def alltiers(interaction: discord.Interaction):
             for p in tier_data[tier]:
                 total = p["wins"] + p["losses"]
                 winrate = round((p["wins"] / total * 100)) if total > 0 else 0
-                dname = await get_display_name(interaction.guild, p["name"])
                 uid = get_uid(p["name"])
-                lines.append(f"**{global_rank}. <@{uid}>** W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
+                lines.append(f"**{global_rank}.** <@{uid}> W: {p['wins']} | L: {p['losses']} | Goals: {p['goals']} | Winrate: {winrate}%")
                 global_rank += 1
             embed.add_field(name="​", value="", inline=False)
             embed.add_field(name=f"**{tier}**", value=chr(10).join(lines), inline=False)

@@ -707,6 +707,17 @@ async def setstats(interaction: discord.Interaction, player: discord.Member,
     c = conn.cursor()
     c.execute(f"UPDATE players SET {', '.join(updates)} WHERE name = %s", values)
     conn.commit()
+
+    # If rank changed, fix conflicts in that tier
+    if rank is not None:
+        target_tier = tier if tier else p["tier"]
+        # Push any other player that has the same rank down by 1
+        c.execute(
+            "UPDATE players SET rank_in_tier = rank_in_tier + 1 WHERE tier = %s AND rank_in_tier = %s AND name != %s",
+            (target_tier, rank, uid)
+        )
+        conn.commit()
+
     conn.close()
 
     changed = []

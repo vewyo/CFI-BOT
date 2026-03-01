@@ -56,6 +56,13 @@ def setup_db():
         )
     """)
     c.execute("""
+        CREATE TABLE IF NOT EXISTS overview_ranking (
+            position INTEGER PRIMARY KEY,
+            player_id TEXT NOT NULL,
+            tier TEXT NOT NULL
+        )
+    """)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS matches (
             id SERIAL PRIMARY KEY,
             player1 TEXT,
@@ -776,6 +783,20 @@ async def updateall(interaction: discord.Interaction):
 
     # Reset all round stats and clear pending for everyone
     c.execute("UPDATE players SET round_wins = 0, round_losses = 0, round_done = 0, pending = 0")
+    conn.commit()
+
+    # Save new ranking snapshot to overview_ranking
+    c.execute("SELECT * FROM players ORDER BY rank_in_tier ASC")
+    all_players_after = [dict(p) for p in c.fetchall()]
+    c.execute("DELETE FROM overview_ranking")
+    position = 1
+    for tier in TIERS:
+        for p in [x for x in all_players_after if x["tier"] == tier]:
+            c.execute(
+                "INSERT INTO overview_ranking (position, player_id, tier) VALUES (%s, %s, %s)",
+                (position, get_uid(p["name"]), tier)
+            )
+            position += 1
     conn.commit()
     conn.close()
 

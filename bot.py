@@ -862,10 +862,7 @@ async def on_ready():
         print(f"⏳ on_ready started for {bot.user}")
         setup_db()
         print("📊 Database ready")
-        # Pre-load member cache for all guilds
-        for guild in bot.guilds:
-            await guild.chunk()
-        print("👥 Member cache loaded")
+        print("👥 Skipping member cache preload")
         synced = await tree.sync()
         print(f"✅ Bot is online as {bot.user}!")
         print(f"🎮 Slash commands synced: {len(synced)} commands")
